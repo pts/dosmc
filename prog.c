@@ -10,6 +10,11 @@
 
 #include <dosmc.h>
 
+/* Only with static, both get_str and the string literal will be optimized away. */
+static char *example_get_str(void) {
+  return "LONG STRING";
+}
+
 int double_int(int x) {
   return x * 2;
 }

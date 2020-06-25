@@ -35,14 +35,27 @@ fi
 WASM2NASM_CODE='
   BEGIN { $^W = 1 }
   use integer; use strict;
-  my $mode = "out"; my $had_data = 0; my $had_end = 0; my $prev_org = 0;
+  my $mode = "out"; my $had_data = 0; my $had_end = 0; my $prev_org = 0; my $had_small_code = 0;
+  my %exports;
+  print qq(bits 16\ncpu 8086\n);
   print qq(%ifdef WASM2NASM_EXT_exe\n%include "fullprog_dosexe.inc.nasm"\n%else\n%include "fullprog_doscom.inc.nasm"\n%endif\n);
-  $0 = "wasm2nasm"; $mode = "out";
+  $0 = "wasm2nasm";
   while (<>) {
     $_ .= "\n" if substr($_, -1) ne "\n";
-    if ((m@^[.]387$@ or m@^[ \t]*(?:PUBLIC[ \t]|EXTRN[ \t])@ or m@^DGROUP[ \t]+GROUP[ \t]@) and $mode eq "out") {
+    if ((m@^[.]387$@ or m@^DGROUP[ \t]+GROUP[ \t]@) and $mode eq "out") {
       substr($_, 0, 0) = ";";
-    } elsif (m@^[ \t]+ASSUME[ \t]CS:@ and $mode eq "code") {
+    } elsif (m@^[ \t]*PUBLIC[ \t]+([\$\@\_a-zA-Z][\$\@\w]*)$@ and $mode eq "out") {
+      substr($_, 0, 0) = ";";
+      $exports{$1} = 1;
+    } elsif (m@^[ \t]*EXTRN[ \t]+([\$\@\_a-zA-Z][\$\@\w]*)(?::|\Z)@ and $mode eq "out") {
+      if ($1 eq "_small_code_") {
+        $had_small_code = 1;
+      } elsif ($1 eq "__argc" or $1 eq "_cstart_") {  # wcc generates it if main is defined.
+      } else {
+        die "$0: fatal: undefined symbol: $1\n";
+      }
+      substr($_, 0, 0) = ";";
+    } elsif (m@^[ \t]*ASSUME[ \t]+CS:@ and $mode eq "code") {
       substr($_, 0, 0) = ";";
     } elsif (m@^$@) {
     } elsif (m@[ \t]*END$@) {
@@ -52,8 +65,17 @@ WASM2NASM_CODE='
       $_ = "fullprog_code  ;$_";
       # This breaks line numbers.
       # Zero-initialize .bss (https://retrocomputing.stackexchange.com/a/12030/3494).
-      $_ .= "cld\npush es\npush ds\npop es\nmov di, bss_start\nmov cx, (stack-bss_start+1)>>1\nxor ax, ax\nrep stosw\npop es\n" .
-            "call _main0_\nmov ah, 0x4c  ; EXIT, exit code in al\nint 0x21\n%define fullprog_omit_code_exit\n";
+      $_ .= "cld\npush es\npush ds\npop es\nmov di, bss_start\nmov cx, (stack-bss_start+1)>>1\nxor ax, ax\nrep stosw\npop es\n";
+      my $main_count = (defined($exports{main_}) + defined($exports{_main0_}));  # TODO(pts): Add void _start(void), just its address.
+      die "fatal: $0: missing main function\n" if !$main_count;
+      die "fatal: $0: too many main functions\n" if $main_count > 1;
+      if (defined($exports{main_})) {
+        # TODO(pts): Add automatic splitting unless -D_NOARG_MAIN.
+        # `xor dx, dx` sets argv to NULL. ax is already 0 (for argc).
+        $_ .= "xor dx, dx\ncall main_\nmov ah, 0x4c  ; EXIT, exit code in al\nint 0x21\n%define fullprog_omit_code_exit\n";
+      } elsif (defined($exports{_main0_})) {
+        $_ .= "call _main0_\nmov ah, 0x4c  ; EXIT, exit code in al\nint 0x21\n%define fullprog_omit_code_exit\n";
+      }
     } elsif (m@(?:CONST2?|_DATA)[ \t]+SEGMENT(?:[ \t]|\Z)@ and $mode eq "out") {
       $mode = "data";
       $_ = ($had_data ? ";" : "fullprog_data  ;") . $_;
@@ -73,6 +95,7 @@ WASM2NASM_CODE='
       s@\b(word|byte|dword|qword|near) ptr @$1 @g;
       s@offset DGROUP:@@g;
       s@offset @@g;
+      s@[+]DGROUP:@+@g;
     } elsif (m@^[ \t]*DB[ \t]@ and ($mode eq "code" or $mode eq "data")) {
     } elsif (m@^[ \t]*ORG[ \t](0|[1-9]\d*|[0-9a-fA-F]+H)$@ and $mode eq "bss") {
       my $i = (substr($1, -1) eq "H" ? hex(substr($1, 0, -1)) : int($1)) - $prev_org;
@@ -86,6 +109,7 @@ WASM2NASM_CODE='
     print
   }
   die "$0: fatal: unexpected final mode: $mode\n" if $mode ne "out";
+  die "$0: fatal: missing external symbol: _small_code_\n" if !$had_small_code;
   print "fullprog_end\n" if !$had_end;
 '
 export WASM2NASM_CODE

@@ -40,7 +40,8 @@ dosmc limitations:
   KiB).
 * Only a single .c source file is supported, no additional source files or
   .obj or .lib files.
-* The supplied C library (libc) is very limited. For most functionality,
+* The supplied C library (libc) is very limited, currently it doesn't
+  contain much more than getchar and putchar. For most functionality,
   inline assembly with DOS calls (int 21h) should be used.
 * There is no convenient way yet to get the command-line arguments and the
   environment.
@@ -50,6 +51,8 @@ dosmc limitations:
   library doesn't have functions which take far pointers.
 * It doesn't support code longer than 64 KiB.
 * It doesn't support 32-bit (i386) code or DOS extenders.
+* It doesn't pass command-line arguments to main (always argc=0 argv=NULL).
+  This will be fixed in the future.
 
 dosmc advantages over wcc and owcc in OpenWatcom:
 
