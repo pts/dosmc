@@ -1,0 +1,6 @@
+*~
+*.tmp.nasm
+*.tmp.wasm
+*.tmp.obj
+prog.exe
+prog.com
