@@ -32,7 +32,7 @@ if ! test -x "$MYDIR/ow2bin/wcc"; then
   exit 1
 fi
 
-NASM2WASM_CODE='
+WASM2NASM_CODE='
   BEGIN { $^W = 1 }
   use integer; use strict;
   my $mode = "out"; my $had_data = 0; my $had_end = 0; my $prev_org = 0;
@@ -88,7 +88,7 @@ NASM2WASM_CODE='
   die "$0: fatal: unexpected final mode: $mode\n" if $mode ne "out";
   print "fullprog_end\n" if !$had_end;
 '
-export NASM2WASM_CODE
+export WASM2NASM_CODE
 
 test "$Q" || set -x  # echo commands run.
 
@@ -123,7 +123,7 @@ if ! "$MYDIR"/ow2bin/wdis -a -fi -i=@ "$SRCBASE.tmp.obj" >"$SRCBASE.tmp.wasm"; t
   echo "fatal: wdis failed" >&2
   exit 3
 fi
-if ! perl -e 'eval $ENV{NASM2WASM_CODE}; die $@ if $@' -- "$SRCBASE.tmp.wasm" >"$SRCBASE.tmp.nasm"; then
+if ! perl -e 'eval $ENV{WASM2NASM_CODE}; die $@ if $@' -- "$SRCBASE.tmp.wasm" >"$SRCBASE.tmp.nasm"; then
   test "$Q" || set +x  # Don't echo commands run anymore.
   echo "fatal: wasm2nasm failed" >&2
   exit 3
