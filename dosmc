@@ -1,0 +1,140 @@
+#! /bin/sh --
+# by pts@fazekas.hu at Thu Jun 25 00:59:56 CEST 2020
+
+unset MYDIR BTARG ARG EXT LASTARG SRC SRCBASE EXEOUT Q
+
+MYDIR="${0%/*}"
+
+EXT=exe; Q=-q
+for ARG in "$@"; do
+  # TODO(pts): Add -nq flag for non-quiet operation, also print other commands.
+  case "$ARG" in
+   -q) Q=-q ;;
+   -nq) Q= ;;
+   -bt=dos | -bt=exe) EXT=exe  ;; # Default.
+   -bt=com) EXT=com ;;
+   -fo=*) EXEOUT="${ARG#*=}" ;;
+  esac
+  LASTARG="$ARG"
+done
+
+if test "${LASTARG%.c}" = "$LASTARG" || test "${LASTARG#-}" != "$LASTARG"; then
+  echo "Usage: $0 [<wcc-flag> ...] <prog.c>" >&2
+  exit 1
+fi
+SRC="$LASTARG"; SRCBASE="${SRC%.*}"
+if ! test -f "$SRC"; then
+  echo "fatal: source file missing: $SRC" >&2
+fi
+test "$EXEOUT" || EXEOUT="$SRCBASE.$EXT"
+if ! test -x "$MYDIR/ow2bin/wcc"; then
+  echo "fatal: missing executable $MYDIR/ow2bin/wcc; run $MYDIR/download_openwatcom.sh first" >&2
+  exit 1
+fi
+
+NASM2WASM_CODE='
+  BEGIN { $^W = 1 }
+  use integer; use strict;
+  my $mode = "out"; my $had_data = 0; my $had_end = 0; my $prev_org = 0;
+  print qq(%ifdef WASM2NASM_EXT_exe\n%include "fullprog_dosexe.inc.nasm"\n%else\n%include "fullprog_doscom.inc.nasm"\n%endif\n);
+  $0 = "wasm2nasm"; $mode = "out";
+  while (<>) {
+    $_ .= "\n" if substr($_, -1) ne "\n";
+    if ((m@^[.]387$@ or m@^[ \t]*(?:PUBLIC[ \t]|EXTRN[ \t])@ or m@^DGROUP[ \t]+GROUP[ \t]@) and $mode eq "out") {
+      substr($_, 0, 0) = ";";
+    } elsif (m@^[ \t]+ASSUME[ \t]CS:@ and $mode eq "code") {
+      substr($_, 0, 0) = ";";
+    } elsif (m@^$@) {
+    } elsif (m@[ \t]*END$@) {
+      print "fullprog_end  ;$_"; $had_end = 1; last
+    } elsif (m@_TEXT[ \t]+SEGMENT(?:[ \t]|\Z)@ and $mode eq "out") {
+      $mode = "code";
+      $_ = "fullprog_code  ;$_";
+      # This breaks line numbers.
+      # Zero-initialize .bss (https://retrocomputing.stackexchange.com/a/12030/3494).
+      $_ .= "cld\npush es\npush ds\npop es\nmov di, bss_start\nmov cx, (stack-bss_start+1)>>1\nxor ax, ax\nrep stosw\npop es\n" .
+            "call _main0_\nmov ah, 0x4c  ; EXIT, exit code in al\nint 0x21\n%define fullprog_omit_code_exit\n";
+    } elsif (m@(?:CONST2?|_DATA)[ \t]+SEGMENT(?:[ \t]|\Z)@ and $mode eq "out") {
+      $mode = "data";
+      $_ = ($had_data ? ";" : "fullprog_data  ;") . $_;
+      $had_data = 1;
+    } elsif (m@_BSS[ \t]+SEGMENT(?:[ \t]|\Z)@ and $mode eq "out") {
+      $mode = "bss"; $prev_org = 0;
+      $_ = "fullprog_bss\n";
+    } elsif (m@(?:_TEXT|CONST2?|_DATA|_BSS)[ \t]+ENDS@) {
+      $mode = "out";
+      substr($_, 0, 0) = ";";
+    } elsif (m@^[\$\@\_a-zA-Z][\$\@\w]*:$@ and ($mode eq "code" or $mode eq "data")) {  # Label.
+    } elsif (m@^([\$\@\_a-zA-Z][\$\@\w]*)[ \t]+LABEL[ \t]@ and $mode eq "bss") {  # Label.
+      $_ = "$1:\n";
+    } elsif (m@^\t[a-z]@ and $mode eq "code") {  # Assembly instruction.
+      # Convert WASM addressing to NASM.
+      s@\b(word|byte|dword|qword) ptr ([^\[\],\n;]+)@$1 [$2]@g;
+      s@\b(word|byte|dword|qword|near) ptr @$1 @g;
+      s@offset DGROUP:@@g;
+      s@offset @@g;
+    } elsif (m@^[ \t]*DB[ \t]@ and ($mode eq "code" or $mode eq "data")) {
+    } elsif (m@^[ \t]*ORG[ \t](0|[1-9]\d*|[0-9a-fA-F]+H)$@ and $mode eq "bss") {
+      my $i = (substr($1, -1) eq "H" ? hex(substr($1, 0, -1)) : int($1)) - $prev_org;
+      $_ = "resb $i\n";
+      $prev_org += $i;
+    } elsif (m@^[.]@) {
+      die "$0: fatal: unsupported directive: $_";
+    } else {
+      die "$0: fatal: syntax error: $_";
+    }
+    print
+  }
+  die "$0: fatal: unexpected final mode: $mode\n" if $mode ne "out";
+  print "fullprog_end\n" if !$had_end;
+'
+export NASM2WASM_CODE
+
+test "$Q" || set -x  # echo commands run.
+
+# Corresponding `wcc: owcc' flags:
+# -v: lack of -q
+# -bdos: -bt=dos
+# -ms: -mcomodel=s (default)
+# -i=... : -I...
+# -s: -fno-stack-check
+# -os: -Os  TODO(pts): Should we do -om -oi -ol (from -ox) as well?
+# -0: -march=i86
+# -W: ??
+# ??: -W
+# -w4: -Wall
+# -wx: -Wextra
+# -we: -Werror
+# -wcd=202: -Wcd=202 ??
+# -D...: -D...
+# -0: -march=i386
+# (default to generate obj, do not link): -c
+# -fo=...: -o ...
+# -fr: ?? Set error filename.
+# No need to set $WATCOM or to extend $PATH.
+# 202: symbol defined but not referenced (useful for static functions).
+if ! "$MYDIR"/ow2bin/wcc $Q -bt=dos -ms -i="$MYDIR" -s -os -W -w4 -wx -we -wcd=202 -D__DOSMC__ -0 -fo="$SRCBASE.tmp.obj" -fr "$SRC"; then
+  test "$Q" || set +x  # Don't echo commands run anymore.
+  echo "fatal: wcc failed" >&2
+  exit 2
+fi
+if ! "$MYDIR"/ow2bin/wdis -a -fi -i=@ "$SRCBASE.tmp.obj" >"$SRCBASE.tmp.wasm"; then
+  test "$Q" || set +x  # Don't echo commands run anymore.
+  echo "fatal: wdis failed" >&2
+  exit 3
+fi
+if ! perl -e 'eval $ENV{NASM2WASM_CODE}; die $@ if $@' -- "$SRCBASE.tmp.wasm" >"$SRCBASE.tmp.nasm"; then
+  test "$Q" || set +x  # Don't echo commands run anymore.
+  echo "fatal: wasm2nasm failed" >&2
+  exit 3
+fi
+if ! nasm -f bin -I "$MYDIR" -DWASM2NASM_EXT_"$EXT" -o "$EXEOUT" "$SRCBASE.tmp.nasm"; then
+  test "$Q" || set +x  # Don't echo commands run anymore.
+  echo "fatal: nasm failed" >&2
+  exit 3
+fi
+test "$Q" || set +x  # Don't echo commands run anymore.
+# : ndisasm -b 16 -e 24 -o 8 "$SRCBASE.exe" >"$SRCBASE.ndisasm"
+# : ndisasm -b 16 -o 0x100 "$SRCBASE.com" >"$SRCBASE.ndisasm"
+
+: "$0" OK.
