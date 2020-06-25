@@ -4,3 +4,8 @@
 *.tmp.obj
 prog.exe
 prog.com
+/open-watcom-2_0-c.zip
+/open-watcom-2_0-c.zip.tmp
+/ow2bin
+
+ 
