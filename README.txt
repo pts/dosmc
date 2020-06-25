@@ -11,7 +11,7 @@ Usage:
 
   $ ./dosmc prog.c  # Creates prog.exe.
 
-  $ ./owccods -bt=com prog.c  # Creates prog.com.
+  $ ./dosmc -bt=com prog.c  # Creates prog.com.
 
 To try it, run `dosbox .' (without the quotes), and within the DOSBox
 window, run prog.exe or prog.com . The expected output is `ZYfghiHello!'
