@@ -48,9 +48,10 @@ fullprog___check_empty
 bits 16
 section .text align=1 vstart=-0x10
 ; DOS .exe header, similar to: https://stackoverflow.com/q/14246493/97248
+exe_header:
 db 'MZ'  ; Signature.
-dw ((code_end-code_startseg)+(data_end-data_start))&511|(((~((code_end-code_startseg)+(data_end-data_start))&511)+1)&512)  ; Image size low 9 bits, 0 replaced with 512.
-dw ((code_end-code_startseg)+(data_end-data_start))>>9  ; Image size high bits.
+dw ((code_end-exe_header)+(data_end-data_start))&511  ; Image size low 9 bits.
+dw ((code_end-exe_header)+(data_end-data_start)+511)>>9  ; Image size high bits, including header and relocations (none here), excluding .bss, rounded up.
 dw call__fullprog_end*0  ; Relocation count.
 dw 1  ; Paragraph (16 byte) count of header. Points to code_startseg.
 dw (bss_end-bss_start+15-(-((data_end-data_start)+(code_end-code_startseg))&15))>>4  ; Paragraph count of minimum required memory.
