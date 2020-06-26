@@ -5,7 +5,7 @@ static inline int _printmsgx(const char *msg);
 #pragma aux _printmsgx = \
 "mov ah, 9" /* WRITE_STDOUT */ \
 "int 0x21" \
-parm  [ dx ] \
+parm [ dx ] \
 modify [ ah ];
 
 /* TODO(pts): Make it not inline. */
@@ -14,7 +14,8 @@ static void putchar(char c);
 #pragma aux putchar = \
 "mov ah, 2" \
 "int 0x21" \
-parm [ dl ];
+parm [ dl ] \
+modify [ ax ];
 #if 0  /* Correct but longer. */
 #pragma aux putchar = \
 "push ax" \
@@ -24,8 +25,8 @@ parm [ dl ];
 "mov dx, sp" \
 "int 0x21" \
 "pop ax" \
-parm  [ al ] \
-modify [ ax bx cx dx ];  /* Also modifies cf */
+parm [ al ] \
+modify [ bx cx dx ];  /* Also modifies cf */
 #endif
 
 /* TODO(pts): Make it not inline. */
