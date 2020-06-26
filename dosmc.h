@@ -8,11 +8,11 @@ static inline int _printmsgx(const char *msg);
 parm [ dx ] \
 modify [ ah ];
 
+/* Writes single byte to stdout. Binary safe when redirected. */
 /* TODO(pts): Make it not inline. */
-/* Binary safe when redirected. */
 static void putchar(char c);
 #pragma aux putchar = \
-"mov ah, 2" \
+"mov ah, 2"  /* 0x40 would also work, see eputc */ \
 "int 0x21" \
 parm [ dl ] \
 modify [ ax ];
@@ -29,8 +29,22 @@ parm [ al ] \
 modify [ bx cx dx ];  /* Also modifies cf */
 #endif
 
+/* Writes single byte to stderr. Binary safe when redirected. */
 /* TODO(pts): Make it not inline. */
-/* Binary safe when redirected. */
+static void eputc(char c);
+#pragma aux eputc = \
+"push ax" \
+"mov ah, 0x40" \
+"mov bx, 2"  /* stderr */ \
+"mov cx, 1"  /* 1 byte */ \
+"mov dx, sp" \
+"int 0x21" \
+"pop ax" \
+parm [ al ] \
+modify [ bx cx dx ];  /* Also modifies cf */
+
+/* Reads single byte (0..255) from stdin, returns -1 on EOF or error. */
+/* TODO(pts): Make it not inline. */
 static int getchar(void);
 #pragma aux getchar = \
 "mov ah, 0x3f" \
@@ -50,15 +64,5 @@ static int getchar(void);
 "done:" \
 value [ ax ] \
 modify [ bx cx dx ]
-
-#if 0
-"mov ah, 0" \
-"jnc next" \
-"sbb ax, ax" /* ax := -1 */ \
-"next:" \
-"stc" \
-"sbb ax, ax" \
-
-#endif
 
 #endif  /* _DOSMC_H_ */
