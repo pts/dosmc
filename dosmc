@@ -1,7 +1,7 @@
 #! /bin/sh --
 # by pts@fazekas.hu at Thu Jun 25 00:59:56 CEST 2020
 
-unset MYDIR BTARG ARG EXT LASTARG SRC SRCBASE EXEOUT Q
+unset MYDIR BTARG ARG EXT LASTARG SRC SRCBASE EXEOUT Q PL
 
 MYDIR="${0%/*}"
 
@@ -9,7 +9,8 @@ EXT=exe; Q=-q
 for ARG in "$@"; do
   # TODO(pts): Add -nq flag for non-quiet operation, also print other commands.
   case "$ARG" in
-   -q) Q=-q ;;
+   -pl) PL=-pl ;;  # Do preprocessor only.
+   -q) Q=-q ;;  # Quiet.
    -nq) Q= ;;
    -bt=dos | -bt=exe) EXT=exe  ;; # Default.
    -bt=com) EXT=com ;;
@@ -114,6 +115,10 @@ WASM2NASM_CODE='
 '
 export WASM2NASM_CODE
 
+unset WATCOM INCLUDE
+set --
+test "$PL" || set -- -fo="$SRCBASE.tmp.obj" "$@"
+
 test "$Q" || set -x  # echo commands run.
 
 # Corresponding `wcc: owcc' flags:
@@ -135,28 +140,30 @@ test "$Q" || set -x  # echo commands run.
 # (default to generate obj, do not link): -c
 # -fo=...: -o ...
 # -fr: ?? Set error filename.
+# -pl: -E
 # No need to set $WATCOM or to extend $PATH.
-unset WATCOM INCLUDE
 # 202: symbol defined but not referenced (useful for static functions).
-if ! "$MYDIR"/ow2bin/wcc $Q -bt=dos -ms -i="$MYDIR" -s -os -W -w4 -wx -we -wcd=202 -D__DOSMC__ -0 -fo="$SRCBASE.tmp.obj" -fr "$SRC"; then
+if ! "$MYDIR"/ow2bin/wcc $Q $PL -bt=dos -ms -i="$MYDIR" -s -os -W -w4 -wx -we -wcd=202 -D__DOSMC__ -0 "$@" -fr "$SRC"; then
   test "$Q" || set +x  # Don't echo commands run anymore.
   echo "fatal: wcc failed" >&2
   exit 2
 fi
-if ! "$MYDIR"/ow2bin/wdis -a -fi -i=@ "$SRCBASE.tmp.obj" >"$SRCBASE.tmp.wasm"; then
-  test "$Q" || set +x  # Don't echo commands run anymore.
-  echo "fatal: wdis failed" >&2
-  exit 3
-fi
-if ! perl -e 'eval $ENV{WASM2NASM_CODE}; die $@ if $@' -- "$SRCBASE.tmp.wasm" >"$SRCBASE.tmp.nasm"; then
-  test "$Q" || set +x  # Don't echo commands run anymore.
-  echo "fatal: wasm2nasm failed" >&2
-  exit 3
-fi
-if ! nasm -f bin -I "$MYDIR" -DWASM2NASM_EXT_"$EXT" -o "$EXEOUT" "$SRCBASE.tmp.nasm"; then
-  test "$Q" || set +x  # Don't echo commands run anymore.
-  echo "fatal: nasm failed" >&2
-  exit 3
+if test -z "$PL"; then
+  if ! "$MYDIR"/ow2bin/wdis -a -fi -i=@ "$SRCBASE.tmp.obj" >"$SRCBASE.tmp.wasm"; then
+    test "$Q" || set +x  # Don't echo commands run anymore.
+    echo "fatal: wdis failed" >&2
+    exit 3
+  fi
+  if ! perl -e 'eval $ENV{WASM2NASM_CODE}; die $@ if $@' -- "$SRCBASE.tmp.wasm" >"$SRCBASE.tmp.nasm"; then
+    test "$Q" || set +x  # Don't echo commands run anymore.
+    echo "fatal: wasm2nasm failed" >&2
+    exit 3
+  fi
+  if ! nasm -f bin -I "$MYDIR" -DWASM2NASM_EXT_"$EXT" -o "$EXEOUT" "$SRCBASE.tmp.nasm"; then
+    test "$Q" || set +x  # Don't echo commands run anymore.
+    echo "fatal: nasm failed" >&2
+    exit 3
+  fi
 fi
 test "$Q" || set +x  # Don't echo commands run anymore.
 # : ndisasm -b 16 -e 24 -o 8 "$SRCBASE.exe" >"$SRCBASE.ndisasm"
