@@ -136,6 +136,7 @@ test "$Q" || set -x  # echo commands run.
 # -fo=...: -o ...
 # -fr: ?? Set error filename.
 # No need to set $WATCOM or to extend $PATH.
+unset WATCOM INCLUDE
 # 202: symbol defined but not referenced (useful for static functions).
 if ! "$MYDIR"/ow2bin/wcc $Q -bt=dos -ms -i="$MYDIR" -s -os -W -w4 -wx -we -wcd=202 -D__DOSMC__ -0 -fo="$SRCBASE.tmp.obj" -fr "$SRC"; then
   test "$Q" || set +x  # Don't echo commands run anymore.
