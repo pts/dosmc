@@ -1,49 +1,90 @@
 #! /bin/sh --
 # by pts@fazekas.hu at Thu Jun 25 00:59:56 CEST 2020
 
-unset MYDIR BTARG ARG EXT LASTARG SRC SRCBASE EXEOUT Q PL
+unset MYDIR BTARG ARG EXT LASTARG SRC SRCBASE EXEOUT Q PL NFARGC NASMCPU CPUF
 
 MYDIR="${0%/*}"
 
-EXT=exe; Q=-q
-for ARG in "$@"; do
-  # TODO(pts): Add -nq flag for non-quiet operation, also print other commands.
-  case "$ARG" in
-   -pl) PL=-pl ;;  # Do preprocessor only.
-   -q) Q=-q ;;  # Quiet.
+EXT=exe; Q=-q; CPUF=-0
+# Specify these interesting flags near the beginning.
+while test $# != 0; do
+  case "$1" in
+   -pl | -zs) PL="$1" ;;  # Do preprocessor or syntax check only.
+   -q) Q=-q ;;  # Quiet. Default.
    -nq) Q= ;;
    -bt=dos | -bt=exe) EXT=exe  ;; # Default.
    -bt=com) EXT=com ;;
-   -fo=*) EXEOUT="${ARG#*=}" ;;
+   -fo=*) EXEOUT="${1#*=}" ;;
+   -ms) ;;
+   -m*) echo "$0: fatal: only -ms (small memory model) supported: $1" >&2; exit 1 ;;
+   -[0-6]) CPUF="$1" ;;
+   -bt*) echo "$0: fatal: unsupported target: $1" >&2; exit 1 ;;
+   -b* | -zW* | -zw*) echo "$0: fatal: unsupported Windows target: $1" >&2; exit 1 ;;
+   *) break ;;  # All other flags will be passed to wcc verbatim.
   esac
-  LASTARG="$ARG"
+  shift
+done
+for ARG in "$@"; do
+  case "$ARG" in
+   -*) ;;
+   *) NFARGC="$NFARGC." ; LASTARG="$ARG" ;;
+  esac
 done
 
-if test "${LASTARG%.c}" = "$LASTARG" || test "${LASTARG#-}" != "$LASTARG"; then
-  echo "Usage: $0 [<wcc-flag> ...] <prog.c>" >&2
+if test $# = 0 || test "$1" = "-?" || test "$1" = -h || test "$1" = --help; then
+  test $# = 0 && exec >&2
+  echo "dosmc: C compiler driver to produce tiny DOS .exe and .com executables"
+  echo "This is free software, GNU GPL >=2.0. There is NO WARRANTY. Use at your risk."
+  echo "Usage: $0 [<dosmc-flag> ...] [<wcc-flag> ...] <prog.c>"
+  echo "To compile DOS .exe, specify no flag. To compile DOS .com, specify -bt=com"
+  echo "See details on https://github.com/pts/dosmc"
+  test $# = 0 && exit 1
+  exit
+fi
+if test -z "$NFARGC"; then
+  echo "$0: fatal: missing .c source file argument" >&2
   exit 1
 fi
+if test "$NFARGC" != .; then
+  echo "$0: fatal: moultiple .c source file arguments" >&2
+  exit 1
+fi
+if test "${LASTARG%.c}" = "$LASTARG"; then
+  echo "$0: fatal: source file must be .c: $LASTARG" >&2
+  exit 1
+fi
+
+if ! test -x "$MYDIR/ow2bin/wcc"; then
+  echo "$0: fatal: missing executable $MYDIR/ow2bin/wcc; run $MYDIR/download_openwatcom.sh first" >&2
+  exit 1
+fi
+unset WATCOM INCLUDE
 SRC="$LASTARG"; SRCBASE="${SRC%.*}"
 if ! test -f "$SRC"; then
-  echo "fatal: source file missing: $SRC" >&2
+  echo "$0: fatal: source file missing: $SRC" >&2
 fi
-test "$EXEOUT" || EXEOUT="$SRCBASE.$EXT"
-if ! test -x "$MYDIR/ow2bin/wcc"; then
-  echo "fatal: missing executable $MYDIR/ow2bin/wcc; run $MYDIR/download_openwatcom.sh first" >&2
-  exit 1
+if test "$PL"; then  # Preprocessor only.
+  test "$EXEOUT" && set -- -fo="$EXEOUT" "$@"
+else
+  test "$EXEOUT" || EXEOUT="$SRCBASE.$EXT"
+  set -- -fo="$SRCBASE.tmp.obj" "$@"
 fi
+set -- -D__DOSMC__ "$@"
+test "$EXT" = com && set -- -D__DOSMC_COM__ "$@"
+NASMCPU=8086
+test "$CPUF" = -0 || NASMCPU="${CPUF#-}86"
 
 WASM2NASM_CODE='
   BEGIN { $^W = 1 }
   use integer; use strict;
   my $mode = "out"; my $had_data = 0; my $had_end = 0; my $prev_org = 0; my $had_small_code = 0;
   my %exports;
-  print qq(bits 16\ncpu 8086\n);
+  print qq(bits 16\ncpu NASMCPU\n);
   print qq(%ifdef WASM2NASM_EXT_exe\n%include "fullprog_dosexe.inc.nasm"\n%else\n%include "fullprog_doscom.inc.nasm"\n%endif\n);
   $0 = "wasm2nasm";
   while (<>) {
     $_ .= "\n" if substr($_, -1) ne "\n";
-    if ((m@^[.]387$@ or m@^DGROUP[ \t]+GROUP[ \t]@) and $mode eq "out") {
+    if ((m@^[.](?:387|386p)$@ or m@^DGROUP[ \t]+GROUP[ \t]@) and $mode eq "out") {
       substr($_, 0, 0) = ";";
     } elsif (m@^[ \t]*PUBLIC[ \t]+([\$\@\_a-zA-Z][\$\@\w]*)$@ and $mode eq "out") {
       substr($_, 0, 0) = ";";
@@ -68,8 +109,8 @@ WASM2NASM_CODE='
       # Zero-initialize .bss (https://retrocomputing.stackexchange.com/a/12030/3494).
       $_ .= "cld\npush es\npush ds\npop es\nmov di, bss_start\nmov cx, (stack-bss_start+1)>>1\nxor ax, ax\nrep stosw\npop es\n";
       my $main_count = (defined($exports{main_}) + defined($exports{_main0_}));  # TODO(pts): Add void _start(void), just its address.
-      die "fatal: $0: missing main function\n" if !$main_count;
-      die "fatal: $0: too many main functions\n" if $main_count > 1;
+      die "$0: fatal: missing main function\n" if !$main_count;
+      die "$0: fatal: too many main functions\n" if $main_count > 1;
       if (defined($exports{main_})) {
         # TODO(pts): Add automatic splitting unless -D_NOARG_MAIN.
         # `xor dx, dx` sets argv to NULL. ax is already 0 (for argc).
@@ -115,10 +156,6 @@ WASM2NASM_CODE='
 '
 export WASM2NASM_CODE
 
-unset WATCOM INCLUDE
-set --
-test "$PL" || set -- -fo="$SRCBASE.tmp.obj" "$@"
-
 test "$Q" || set -x  # echo commands run.
 
 # Corresponding `wcc: owcc' flags:
@@ -136,33 +173,32 @@ test "$Q" || set -x  # echo commands run.
 # -we: -Werror
 # -wcd=202: -Wcd=202 ??
 # -D...: -D...
-# -0: -march=i386
 # (default to generate obj, do not link): -c
 # -fo=...: -o ...
 # -fr: ?? Set error filename.
 # -pl: -E
 # No need to set $WATCOM or to extend $PATH.
 # 202: symbol defined but not referenced (useful for static functions).
-if ! "$MYDIR"/ow2bin/wcc $Q $PL -bt=dos -ms -i="$MYDIR" -s -os -W -w4 -wx -we -wcd=202 -D__DOSMC__ -0 "$@" -fr "$SRC"; then
+if ! "$MYDIR"/ow2bin/wcc $Q $PL -bt=dos -ms -i="$MYDIR" -s -os -W -w4 -wx -we -wcd=202 "$CPUF" -fr "$@"; then
   test "$Q" || set +x  # Don't echo commands run anymore.
-  echo "fatal: wcc failed" >&2
+  echo "$0: fatal: wcc failed" >&2
   exit 2
 fi
 if test -z "$PL"; then
   if ! "$MYDIR"/ow2bin/wdis -a -fi -i=@ "$SRCBASE.tmp.obj" >"$SRCBASE.tmp.wasm"; then
     test "$Q" || set +x  # Don't echo commands run anymore.
-    echo "fatal: wdis failed" >&2
+    echo "$0: fatal: wdis failed" >&2
     exit 3
   fi
   if ! perl -e 'eval $ENV{WASM2NASM_CODE}; die $@ if $@' -- "$SRCBASE.tmp.wasm" >"$SRCBASE.tmp.nasm"; then
     test "$Q" || set +x  # Don't echo commands run anymore.
-    echo "fatal: wasm2nasm failed" >&2
-    exit 3
+    echo "$0: fatal: wasm2nasm failed" >&2
+    exit 4
   fi
-  if ! nasm -f bin -I "$MYDIR" -DWASM2NASM_EXT_"$EXT" -o "$EXEOUT" "$SRCBASE.tmp.nasm"; then
+  if ! nasm -f bin -I "$MYDIR" -DWASM2NASM_EXT_"$EXT" -DNASMCPU="$NASMCPU" -o "$EXEOUT" "$SRCBASE.tmp.nasm"; then
     test "$Q" || set +x  # Don't echo commands run anymore.
-    echo "fatal: nasm failed" >&2
-    exit 3
+    echo "$0: fatal: nasm failed" >&2
+    exit 5
   fi
 fi
 test "$Q" || set +x  # Don't echo commands run anymore.
