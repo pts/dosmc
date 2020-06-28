@@ -65,4 +65,12 @@ static int getchar(void);
 value [ ax ] \
 modify [ bx cx dx ]
 
+static inline void exit(int status);
+#pragma aux exit = \
+"mov ah, 0x4c" \
+"int 0x21" \
+aborts \
+parm [ al ] \
+modify [ ah ];
+
 #endif  /* _DOSMC_H_ */
