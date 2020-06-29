@@ -318,6 +318,8 @@ OBJ2NASM_CODE='
   }
 
   my($fullprog_code, $fullprog_data, $fullprog_bss, $fullprog_end);
+  # No need to disambiguate NASM symbols like code_end, because
+  # wcc adds _ prefix or suffix to all symbols (including static ones).
   if ($EXT eq "exe") {
 # Based on https://github.com/pts/pts-nasm-fullprog/blob/master/fullprog_dosexe.inc.nasm
 $fullprog_code = q(
