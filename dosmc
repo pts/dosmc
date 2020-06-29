@@ -1,6 +1,8 @@
 #! /bin/sh --
 # by pts@fazekas.hu at Thu Jun 25 00:59:56 CEST 2020
 #
+# TODOs:
+#
 # !! Change _main0 to void _start(void);
 # !! Optimize away call in entry point of main and _start.
 # !! Optimize away extra exit after _start.
@@ -9,6 +11,7 @@
 # !! Change .bss do .data (\0) for short .bss.
 # !! Omit the zero-initialize if .bss is empty or it contains argv only.
 # !! Add option for word alignment of data segments, for speed.
+# !! TODO(pts): Add automatic argv splitting for main unless -D_NOARG_MAIN.
 #
 # !! Allow .obj files from NASM, give source example for section.
 # !! Allow .nasm source files, give source example for section.
@@ -413,7 +416,6 @@ times -(((bss_end-bss_start)+(data_end-data_start)+(code_end-code_start+0x100)+3
   my $entry_count = (defined($symbol_ofs{main_}) + defined($symbol_ofs{_main0_}));
   die "$0: fatal: too many entry points (main functions)\n" if $entry_count > 1;
   if (defined($symbol_ofs{main_})) {
-    # !! TODO(pts): Add automatic splitting unless -D_NOARG_MAIN.
     # `xor dx, dx` sets argv to NULL. ax is already 0 (for argc).
     # OpenWatcom wcc does not support non-constant initializers, so we can call
     # main now.
