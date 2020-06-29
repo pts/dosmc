@@ -1,5 +1,20 @@
 #! /bin/sh --
 # by pts@fazekas.hu at Thu Jun 25 00:59:56 CEST 2020
+#
+# !! Change _main0 to void _start(void);
+# !! Optimize away call in entry point of main and _start.
+# !! Optimize away extra exit after _start.
+# !! Optimize away `pop ...' registers at end of _start.
+# !! Optimize `mov al, ...; mov ah, ...' at end of main and _start.
+# !! Change .bss do .data (\0) for short .bss.
+# !! Omit the zero-initialize if .bss is empty or it contains argv only.
+# !! Add option for word alignment of data segments, for speed.
+#
+# !! Allow .obj files from NASM, give source example for section.
+# !! Allow .nasm source files, give source example for section.
+# !! Allow .obj files from A86, give source example for section.
+# !! Allow .obj files from WASM, give source example for section.
+# !! Make simple_nasm_exe.nasm work (ds, ss, sp setup is unnecessary, remove that).
 
 unset MYDIR BTARG ARG EXT LASTARG SRC SRCBASE EXEOUT Q PL NFARGC NASMCPU CPUF
 
@@ -76,87 +91,258 @@ test "$EXT" = com && set -- -D__DOSMC_COM__ "$@"
 NASMCPU=8086
 test "$CPUF" = -0 || NASMCPU="${CPUF#-}86"
 
-WASM2NASM_CODE='
+OBJ2NASM_CODE='
   BEGIN { $^W = 1 }
-  use integer; use strict;
-  my $mode = "out"; my $had_data = 0; my $had_end = 0; my $prev_org = 0; my $had_small_code = 0;
-  my %exports;
-  print qq(bits 16\ncpu NASMCPU\n);
-  print qq(%ifdef WASM2NASM_EXT_exe\n%include "fullprog_dosexe.inc.nasm"\n%else\n%include "fullprog_doscom.inc.nasm"\n%endif\n);
-  $0 = "wasm2nasm";
-  while (<>) {
-    $_ .= "\n" if substr($_, -1) ne "\n";
-    if ((m@^[.](?:387|386p)$@ or m@^DGROUP[ \t]+GROUP[ \t]@) and $mode eq "out") {
-      substr($_, 0, 0) = ";";
-    } elsif (m@^[ \t]*PUBLIC[ \t]+([\$\@\_a-zA-Z][\$\@\w]*)$@ and $mode eq "out") {
-      substr($_, 0, 0) = ";";
-      $exports{$1} = 1;
-    } elsif (m@^[ \t]*EXTRN[ \t]+([\$\@\_a-zA-Z][\$\@\w]*)(?::|\Z)@ and $mode eq "out") {
-      if ($1 eq "_small_code_") {
-        $had_small_code = 1;
-      } elsif ($1 eq "__argc" or $1 eq "_cstart_") {  # wcc generates it if main is defined.
-      } else {
-        die "$0: fatal: undefined symbol: $1\n";
+  use integer;
+  use strict;
+
+  # Basd on: https://pierrelib.pagesperso-orange.fr/exec_formats/OMF_v1.1.pdf
+  my $f = \*STDIN;
+  my @lnames = ("-LN0");
+  my @SEGMENT_ORDER = qw(_TEXT CONST CONST2 _DATA _BSS);  # Constant, OpenWatcom.
+  my %ASM_DATA_OP = (1 => "db", 2 => "dw", 4 => "dd", 8 => "dq");
+  my %segment_name_ok = map { $_ => 1 } @SEGMENT_ORDER;
+  my %segment_sizes;
+  my @segment_names = ("-SN");
+  my %ledata = map { $_ => "" } @SEGMENT_ORDER;  # $segment_name => $ledata_str.
+  my %symbol_ofs;   # $symbol => $ofs.
+  my %segment_symbols = map { $_ => [] } @SEGMENT_ORDER;  # $segment_name => [$symbol, ...].
+  my @extdef = ("-ED");
+  my %fixupp = map { $_ => [] } @SEGMENT_ORDER;  # $segment_name => [[$endofs, $ltypem, $label], ...].
+  my($last_segment_name, $last_ofs);
+  while (1) {
+    my $data;
+    die "$0: fatal: EOF in obj record header\n" if (read($f, $data, 3) or 0) != 3;
+    my($type, $size) = unpack("Cv", $data);
+    die "$0: fatal: empty obj record\n" if !$size;
+    last if $type == 0x8a;  # MODEND.
+    #printf STDERR "info: RECORD 0x%x %d\n", $type, $size;
+    die "$0: fatal: EOF in obj record header\n" if (read($f, $data, $size) or 0) != $size;
+    --$size; substr($data, -1) = "";  # Ignore checksum.
+    if ($type == 0x96) {  # LNAMES.
+      for (my $i = 0; $i < $size; ) {
+        my $fsize = vec($data, $i++, 8);
+        die "$0: fatal: EOF in LNAMES name\n" if $i + $fsize > $size;
+        push(@lnames, $fsize == 0 ? "-LNEMPTY" : substr($data, $i, $fsize));
+        $i += $fsize;
       }
-      substr($_, 0, 0) = ";";
-    } elsif (m@^[ \t]*ASSUME[ \t]+CS:@ and $mode eq "code") {
-      substr($_, 0, 0) = ";";
-    } elsif (m@^$@) {
-    } elsif (m@[ \t]*END$@) {
-      print "fullprog_end  ;$_"; $had_end = 1; last
-    } elsif (m@_TEXT[ \t]+SEGMENT(?:[ \t]|\Z)@ and $mode eq "out") {
-      $mode = "code";
-      $_ = "fullprog_code  ;$_";
-      # This breaks line numbers.
-      # Zero-initialize .bss (https://retrocomputing.stackexchange.com/a/12030/3494).
-      $_ .= "cld\npush es\npush ds\npop es\nmov di, bss_start\nmov cx, (stack-bss_start+1)>>1\nxor ax, ax\nrep stosw\npop es\n";
-      my $main_count = (defined($exports{main_}) + defined($exports{_main0_}));  # TODO(pts): Add void _start(void), just its address.
-      die "$0: fatal: missing main function\n" if !$main_count;
-      die "$0: fatal: too many main functions\n" if $main_count > 1;
-      if (defined($exports{main_})) {
-        # TODO(pts): Add automatic splitting unless -D_NOARG_MAIN.
-        # `xor dx, dx` sets argv to NULL. ax is already 0 (for argc).
-        $_ .= "xor dx, dx\ncall main_\nmov ah, 0x4c  ; EXIT, exit code in al\nint 0x21\n%define fullprog_omit_code_exit\n";
-      } elsif (defined($exports{_main0_})) {
-        $_ .= "call _main0_\nmov ah, 0x4c  ; EXIT, exit code in al\nint 0x21\n%define fullprog_omit_code_exit\n";
+    } elsif ($type == 0x98) {  # SEGDEF.
+      die "$0: fatal: SEGDEF too short" if $size < 6;
+      my $attr = vec($data, 0, 8);
+      die "$0: fatal: unsupported alignment\n" if ($attr >> 5) == 0;
+      my $is_big = ($attr >> 1) & 1;
+      my($segment_size, $segment_name_idx) = unpack("vC", substr($data, 1, 3));
+      die "$0: fatal: bad segment_name_idx\n" if $segment_name_idx >= @lnames;
+      $segment_size = 0x10000 if $is_big;
+      my $segment_name = $lnames[$segment_name_idx];
+      die "$0: fatal: unsupported segment: $segment_name\n" if !$segment_name_ok{$segment_name};
+      die "$0: fatal: duplicate segment: $segment_name\n" if exists($segment_sizes{$segment_name});
+      $segment_sizes{$segment_name} = $segment_size;
+      # Some segment indexes would become 2 bytes, we do not support that.
+      die "$0: fatal: too many segments\n" if @segment_names >= 127;
+      push @segment_names, $segment_name;
+      #print STDERR "info: SEGDEF: $segment_name size=$segment_size\n";
+    } elsif ($type == 0x99) {  # Long SEGDEF.
+      die "$0: fatal: long SEGDEF not supported\n";
+    } elsif ($type == 0xa0) {  # LEDATA.
+      die "$0: fatal: LEDATA too short" if $size < 3;
+      my($segment_idx, $ofs) = unpack("Cv", substr($data, 0, 3));
+      die "$0: fatal: unknown segment: $segment_idx\n" if $segment_idx >= @segment_names;
+      my $segment_name = $segment_names[$segment_idx];
+      $size -= 3; substr($data, 0, 3) = "";
+      #print STDERR "info: LEDATA: $segment_name ofs=$ofs size=$size\n";
+      die "$0: fatal: gap in LEDATA for $segment_name\n" if length($ledata{$segment_name}) != $ofs;
+      $ledata{$segment_name} .= $data;
+      $last_segment_name = $segment_name;  $last_ofs = $ofs;  # For FIXUPP.
+    } elsif ($type == 0xa1) {  # Long LEDATA.
+      die "$0: fatal: long LEDATA not supported\n";
+    } elsif ($type == 0x90 or $type == 0xb6) {  # PUBDEF or LPUBDEF(static).
+      die "$0: fatal: PUBDEF too short" if $size < 2;
+      my $segment_idx = vec($data, 1, 8);
+      die "$0: fatal: unknown segment: $segment_idx\n" if $segment_idx >= @segment_names;
+      my $segment_name = $segment_names[$segment_idx];
+      for (my $i = 2; $i < $size; $i += 3) {
+        my $fsize = vec($data, $i++, 8);
+        die "$0: fatal: EOF in PUBDEF entry\n" if $i + $fsize + 3 > $size;
+        my $symbol = substr($data, $i, $fsize);
+        $i += $fsize;
+        my($ofs, $type) = unpack("vC", substr($data, $i, 3));
+        #print STDERR "info: PUBDEF $segment_name $symbol $ofs $type\n";
+        # Also because we do not support parsing 2-byte type index.
+        die "$0: fatal: bad symbol type: symbol=$symbol type=$type\n" if $type != 0;
+        die "$0: fatal: duplicate symbol: $symbol\n" if exists($symbol_ofs{$symbol});
+        $symbol_ofs{$symbol} = $ofs;
+        push @{$segment_symbols{$segment_name}}, [$ofs, $symbol];
       }
-    } elsif (m@(?:CONST2?|_DATA)[ \t]+SEGMENT(?:[ \t]|\Z)@ and $mode eq "out") {
-      $mode = "data";
-      $_ = ($had_data ? ";" : "fullprog_data  ;") . $_;
-      $had_data = 1;
-    } elsif (m@_BSS[ \t]+SEGMENT(?:[ \t]|\Z)@ and $mode eq "out") {
-      $mode = "bss"; $prev_org = 0;
-      $_ = "fullprog_bss\n";
-    } elsif (m@(?:_TEXT|CONST2?|_DATA|_BSS)[ \t]+ENDS@) {
-      $mode = "out";
-      substr($_, 0, 0) = ";";
-    } elsif (m@^[\$\@\_a-zA-Z][\$\@\w]*:$@ and ($mode eq "code" or $mode eq "data")) {  # Label.
-    } elsif (m@^([\$\@\_a-zA-Z][\$\@\w]*)[ \t]+LABEL[ \t]@ and $mode eq "bss") {  # Label.
-      $_ = "$1:\n";
-    } elsif (m@^\t[a-z]@ and $mode eq "code") {  # Assembly instruction.
-      # Convert WASM addressing to NASM.
-      s@\b(word|byte|dword|qword) ptr ([^\[\],\n;]+)@$1 [$2]@g;
-      s@\b(word|byte|dword|qword|near) ptr @$1 @g;
-      s@offset DGROUP:@@g;
-      s@offset @@g;
-      s@[+]DGROUP:@+@g;
-    } elsif (m@^[ \t]*DB[ \t]@ and ($mode eq "code" or $mode eq "data")) {
-    } elsif (m@^[ \t]*ORG[ \t](0|[1-9]\d*|[0-9a-fA-F]+H)$@ and $mode eq "bss") {
-      my $i = (substr($1, -1) eq "H" ? hex(substr($1, 0, -1)) : int($1)) - $prev_org;
-      $_ = "resb $i\n";
-      $prev_org += $i;
-    } elsif (m@^[.]@) {
-      die "$0: fatal: unsupported directive: $_";
+    } elsif ($type == 0x91) {  # Long PUBDEF.
+      die "$0: fatal: long PUBDEF not supported\n";
+    } elsif ($type == 0xb7) {  # Long LPUBDEF.
+      die "$0: fatal: long LPUBDEF not supported\n";
+    } elsif ($type == 0x8c or $type == 0xb4) {  # EXTDEF or LEXTDEF(static).
+      for (my $i = 0; $i < $size; ) {
+        my $fsize = vec($data, $i++, 8);
+        die "$0: fatal: EOF in EXTDEF entry\n" if $i + $fsize + 1 > $size;
+        my $symbol = substr($data, $i, $fsize);
+        $i += $fsize;
+        my $type = unpack("C", substr($data, $i++, 1));
+        # Also because we do not support parsing 2-byte type index.
+        die "$0: fatal: unsupported EXTDEF type: symbol=$symbol type=$type\n" if $type != 0;
+        #print STDERR "info: EXTDEF $symbol $type\n";
+        push @extdef, $symbol;
+      }
+    } elsif ($type == 0xb5) {  # Long LEXTDEF.
+      die "$0: fatal: long LEXTDEF not supported\n";
+    } elsif ($type == 0x9c) {  # FIXUPP.
+      die "$0: fatal: FIXUPP must follow LEDATA\n" if !defined($last_ofs);
+      die "$0: fatal: FIXUPP not allowed in _BSS" if $last_segment_name eq "_BSS";
+      for (my $i = 0; $i < $size; ) {
+        die "$0: fatal: EOF in FIXUP header\n" if $i + 3 > $size;
+        my ($a, $ofs, $fd) = unpack("CCC", substr($data, $i, 3));
+        #print STDERR "info: FIXUPP bytes " . unpack("H*", substr($data, $i, 3)) . "\n";
+        #printf STDERR "info: FIXUPP a=0x%x dro=0x%x fd=0x%x\n", $a, $ofs, $fd;
+        $i += 3;
+        die "$0: fatal: THREAD subrecord not supported\n" if !($a & 0x80);
+        die "$0: fatal: frame thread not supported\n" if $fd & 0x80;
+        die "$0: fatal: target thread not supported\n" if $fd & 8;
+        my $is_self = ~($a >> 6) & 1;
+        my $ltype = ($a >> 2) & 15;
+        my $lsize = $ltype == 1 ? 2 : undef;
+        die "$0: fatal: unsupported FIXUPP location type: $ltype\n" if !defined($lsize);
+        my $ltypem = $is_self ? -$ltype : $ltype;
+        $ofs = $last_ofs + ($ofs | ($a & 3) << 8);
+        my $endofs = $ofs + $lsize;
+        die "$0: fatal: FIXUPP data record offset too large\n" if
+            $endofs > length($ledata{$last_segment_name});
+        my $frame = ($fd >> 4) & 7;
+        my $target = $fd & 7;
+        my $fixuppr = $fixupp{$last_segment_name};
+        die "$0: fatal: FIXUPP must not overlap\n" if @$fixuppr and $fixuppr->[-1][0] > $ofs;
+        my $symbol;
+        if ($frame == 5 and $target == 6) {
+          die "$0: fatal: EOF in FIXUPP target\n" if $i >= $size;
+          my $extdef_idx = vec($data, $i++, 8);
+          if ($extdef_idx >= 0x80) {
+            die "$0: fatal: EOF in FIXUPP target 2-byte extdef_idx\n" if $i >= $size;
+            $extdef_idx = ($extdef_idx - 0x80) << 8 | vec($data, $i++, 8);
+          }
+          die "$0: fatal: FIXUPP EXTDEF index is 0\n" if $extdef_idx == 0;
+          die "$0: fatal: unknown FIXUPP EXTDEF index: $extdef_idx\n" if $extdef_idx >= @extdef;
+          $symbol = $extdef[$extdef_idx];
+          #print STDERR "info: FIXUPP 16-bit $is_self \@$ofs EXTDEF $symbol\n";
+        } elsif ($frame == 1 and $target == 4) {
+          # We usually get it for string literals in CONST.
+          die "$0: fatal: EOF in FIXUPP target\n" if $i + 2 > $size;
+          my $segment_idx = vec($data, $i + 1, 8);
+          $i += 2;
+          die "$0: fatal: unknown segment: $segment_idx\n" if $segment_idx >= @segment_names;
+          my $segment_name = $segment_names[$segment_idx];
+          #print STDERR "info: FIXUPP 16-bit $is_self \@$ofs SEGMENT $segment_name\n";
+          $symbol = "OBJ_SEGMENT_${segment_name}_start";
+        } else {
+          die "$0: fatal: unsupported FIXUPP: frame=$frame target=$target\n";
+        }
+        push @$fixuppr, [$endofs, $ofs, $ltypem, $symbol];
+      }
+    } elsif ($type == 0x9d) {  # Long FIXUPP.
+      die "$0: fatal: long FIXUPP not supported\n";
+    } elsif ($type == 0x80) {  # THEADR.
+    } elsif ($type == 0x88) {  # COMENT.
+    } elsif ($type == 0x9a) {  # GRPDEF.
     } else {
-      die "$0: fatal: syntax error: $_";
+      # We do not need to support common symbols, wcc never generates them.
+      die sprintf("%s: fatal: unsupported obj record type: type=0x%x size=%d\n", $0, $type, $size);
     }
-    print
+    $last_segment_name = $last_ofs = undef if $type != 0xa0 and $type != 0xa1 and $type != 0x9c;
   }
-  die "$0: fatal: unexpected final mode: $mode\n" if $mode ne "out";
-  die "$0: fatal: missing external symbol: _small_code_\n" if !$had_small_code;
-  print "fullprog_end\n" if !$had_end;
+
+  for my $segment_name (@SEGMENT_ORDER) {
+    my $size = $segment_name eq "_BSS" ? 0 : $segment_sizes{$segment_name};
+    die "$0: fatal: segment size mismatch for $segment_name\n" if
+        length($ledata{$segment_name}) != $size;
+  }
+
+  my %undefined_symbols = map { $_ => 1 } @extdef;
+  delete $undefined_symbols{$extdef[0]};
+  for my $symbol (keys %symbol_ofs) {
+    delete $undefined_symbols{$symbol};
+  }
+  delete $undefined_symbols{__argc};
+  delete $undefined_symbols{_cstart_};
+  die "$0: fatal: missing symbol: _small_code_\n" if !exists($undefined_symbols{_small_code_});
+  delete $undefined_symbols{_small_code_};
+  my @undefined_symbols = sort keys %undefined_symbols;
+  die "$0: fatal: undefined symbols: @undefined_symbols\n" if @undefined_symbols;
+
+  sub dump_segment($) {
+    my $segment_name = $_[0];
+    my $size = $segment_sizes{$segment_name};
+    print "OBJ_SEGMENT_${segment_name}_start:\n";
+    print "OBJ_SEGMENT_${segment_name}_size equ $size\n";
+
+    # Sort by ofs ascending.
+    my @symbols = sort { $a->[0] <=> $b->[0] or $a->[1] cmp $b->[1] } @{$segment_symbols{$segment_name}};
+    my $fixupr = $fixupp{$segment_name};  # Already sorted.
+    my $fi = 0; my $si = 0; my $i = 0;
+    my $is_bss = $segment_name eq "_BSS";
+    my $data = $ledata{$segment_name};
+    my $chunk_sub = $segment_name eq "_BSS" ? sub { my $size = $_[0] - $i; print "resb $size\n"; $i = $_[0]; } : sub {
+      my $j = $_[0];
+      while ($fi < @$fixupr and $fixupr->[$fi][1] < $j) {  # Apply fixup.
+        my($endofs, $ofs, $ltypem, $symbol) = @{$fixupr->[$fi++]};
+        my $line = unpack("H*", substr($data, $i, $ofs - $i)); $line =~ s@(..)(?=.)@$1, 0x@sg; print "db 0x$line\n";
+        my $base = sprintf("0x%x", unpack("v", substr($data, $ofs, 2)));
+        my $size = $endofs - $ofs;
+        my $rel = $ltypem < 0 ? "-(\$+$size)" : "";
+        print "$ASM_DATA_OP{$size} $base+$symbol$rel\n";
+        $i = $endofs;
+      }
+      my $line = unpack("H*", substr($data, $i, $j - $i)); $line =~ s@(..)(?=.)@$1, 0x@sg; print "db 0x$line\n";
+      $i = $j;
+    };
+    my @L = map { $_->[0] } @symbols;
+    while ($si < @symbols) {
+      my $j = $symbols[$si][0];
+      if ($j > $size or $j < $i) {
+        print "$symbols[$si][1] equ $j+OBJ_SEGMENT_${segment_name}_start\n";
+        ++$si; next
+      }
+      $chunk_sub->($j) if $j > $i;
+      for (; $si < @symbols and $symbols[$si][0] == $j; ++$si) {
+        print "$symbols[$si][1]:\n";
+      }
+    }
+    $chunk_sub->($size) if $size > $i;
+  }
+
+  print qq(bits 16\ncpu NASM_CPU\n);
+  print qq(%ifdef NASM_EXT_exe\n%include "fullprog_dosexe.inc.nasm"\n%else\n%include "fullprog_doscom.inc.nasm"\n%endif\n);
+  print qq(fullprog_code\n);
+  print qq(cld\npush es\npush ds\npop es\nmov di, bss_start\nmov cx, (stack-bss_start+1)>>1\nxor ax, ax\nrep stosw\npop es\n);
+
+  my $entry_count = (defined($symbol_ofs{main_}) + defined($symbol_ofs{_main0_}));
+  die "$0: fatal: too many entry points (main functions)\n" if $entry_count > 1;
+  if (defined($symbol_ofs{main_})) {
+    # !! TODO(pts): Add automatic splitting unless -D_NOARG_MAIN.
+    # `xor dx, dx` sets argv to NULL. ax is already 0 (for argc).
+    # OpenWatcom wcc does not support non-constant initializers, so we can call
+    # main now.
+    print "xor dx, dx\ncall main_\nmov ah, 0x4c  ; EXIT, exit code in al\nint 0x21\n%define fullprog_omit_code_exit\n";
+  } elsif (defined($symbol_ofs{_main0_})) {
+    print qq(db 0xE8\ndw 0x0000+_main0_-\(\$+2\)  ; call _main0_\nmov ah, 0x4c  ; EXIT, exit code in al\nint 0x21\n);
+  } else {
+    die "$0: fatal: missing entry point (main function)\n";
+  }
+  print qq(%define fullprog_omit_code_exit\n);
+  dump_segment("_TEXT");
+  print qq(fullprog_data\n);
+  dump_segment("CONST");  # String literals.
+  dump_segment("CONST2");  # Other global consts.
+  dump_segment("_DATA");
+  print qq(fullprog_bss\n);
+  dump_segment("_BSS");
+  print qq(fullprog_end\n);
 '
-export WASM2NASM_CODE
+export OBJ2NASM_CODE
 
 test "$Q" || set -x  # echo commands run.
 
@@ -187,17 +373,13 @@ if ! "$MYDIR"/ow2bin/wcc $Q $PL -bt=dos -ms -i="$MYDIR" -s -os -W -w4 -wx -we -w
   exit 2
 fi
 if test -z "$PL"; then
-  if ! "$MYDIR"/ow2bin/wdis -a -fi -i=@ "$SRCBASE.tmp.obj" >"$SRCBASE.tmp.wasm"; then
+  #if ! "$MYDIR"/ow2bin/wdis -a -fi -i=@ "$SRCBASE.tmp.obj" >"$SRCBASE.tmp.wasm"; then die...; fi
+  if ! perl -e 'eval $ENV{OBJ2NASM_CODE}; die $@ if $@' <"$SRCBASE.tmp.obj" >"$SRCBASE.tmp.nasm"; then
     test "$Q" || set +x  # Don't echo commands run anymore.
-    echo "$0: fatal: wdis failed" >&2
-    exit 3
-  fi
-  if ! perl -e 'eval $ENV{WASM2NASM_CODE}; die $@ if $@' -- "$SRCBASE.tmp.wasm" >"$SRCBASE.tmp.nasm"; then
-    test "$Q" || set +x  # Don't echo commands run anymore.
-    echo "$0: fatal: wasm2nasm failed" >&2
+    echo "$0: fatal: obj2nasm failed" >&2
     exit 4
   fi
-  if ! nasm -f bin -I "$MYDIR" -DWASM2NASM_EXT_"$EXT" -DNASMCPU="$NASMCPU" -o "$EXEOUT" "$SRCBASE.tmp.nasm"; then
+  if ! nasm -f bin -I "$MYDIR" -DNASM_EXT_"$EXT" -DNASM_CPU="$NASMCPU" -o "$EXEOUT" "$SRCBASE.tmp.nasm"; then
     test "$Q" || set +x  # Don't echo commands run anymore.
     echo "$0: fatal: nasm failed" >&2
     exit 5

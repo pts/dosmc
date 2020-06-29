@@ -26,11 +26,9 @@ http://github.com/pts/pts-xtiny
 dosmc limitations:
 
 * Build system must be Linux i386 or amd64. (It's possible to make it work
-  on other Unix systems on which wcc and wdis are available.)
+  on other Unix systems on which wcc is available.)
 * It depends on Perl (standard packages only).
 * It depends on the wcc C compiler in OpenWatcom V2.
-* It depends on the wdis disassembler in OpenWatcom V2. This dependency will be
-  removed in the future.
 * It depends on nasm (NASM, Netwide Assembler). This dependency will be
   removed in the future.
 * Target is DOS 8086 (16-bit) .exe or DOS 8086 (16-bit) .com.
