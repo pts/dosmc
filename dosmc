@@ -16,15 +16,15 @@
 # !! Allow .obj files from WASM, give source example for section.
 # !! Make simple_nasm_exe.nasm work (ds, ss, sp setup is unnecessary, remove that).
 
-unset MYDIR BTARG ARG EXT LASTARG SRC SRCBASE EXEOUT Q PL NFARGC NASMCPU CPUF
+unset MYDIR BTARG ARG EXT LASTARG SRC SRCBASE EXEOUT Q PL PLL NFARGC NASMCPU CPUF
 
 MYDIR="${0%/*}"
 
 EXT=exe; Q=-q; CPUF=-0
-# Specify these interesting flags near the beginning.
+# Specify these interesting wcc or wcl flags near the beginning.
 while test $# != 0; do
   case "$1" in
-   -pl | -zs) PL="$1" ;;  # Do preprocessor or syntax check only.
+   -pl | -zs | -c) PL="$1" ;;  # Do preprocessor, syntax check or compile only.
    -q) Q=-q ;;  # Quiet. Default.
    -nq) Q= ;;
    -bt=dos | -bt=exe) EXT=exe  ;; # Default.
@@ -81,6 +81,12 @@ if ! test -f "$SRC"; then
   echo "$0: fatal: source file missing: $SRC" >&2
 fi
 if test "$PL"; then  # Preprocessor only.
+  if test "$PL" = -c; then
+    PLL=
+    test "$EXEOUT" || EXEOUT="$SRCBASE.obj"
+  else
+    PLL="$PL"
+  fi
   test "$EXEOUT" && set -- -fo="$EXEOUT" "$@"
 else
   test "$EXEOUT" || EXEOUT="$SRCBASE.$EXT"
@@ -451,7 +457,7 @@ test "$Q" || set -x  # echo commands run.
 # -pl: -E
 # No need to set $WATCOM or to extend $PATH.
 # 202: symbol defined but not referenced (useful for static functions).
-if ! "$MYDIR"/ow2bin/wcc $Q $PL -bt=dos -ms -i="$MYDIR" -s -os -W -w4 -wx -we -wcd=202 "$CPUF" -fr "$@"; then
+if ! "$MYDIR"/ow2bin/wcc $Q $PLL -bt=dos -ms -i="$MYDIR" -s -os -W -w4 -wx -we -wcd=202 "$CPUF" -fr "$@"; then
   test "$Q" || set +x  # Don't echo commands run anymore.
   echo "$0: fatal: wcc failed" >&2
   exit 2
