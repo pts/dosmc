@@ -20,6 +20,8 @@ while test $# != 0; do
    -[0-6]) CPUF="$1" ;;
    -bt*) echo "$0: fatal: unsupported target: $1" >&2; exit 1 ;;
    -b* | -zW* | -zw*) echo "$0: fatal: unsupported Windows target: $1" >&2; exit 1 ;;
+   -ecw) ;;  # We support only the Watcom default calling convention (and name mangling).
+   -ec*) echo "$0: fatal: unsupported default calling convention: $1" >&2; exit 1 ;;
    *) break ;;  # All other flags will be passed to wcc verbatim.
   esac
   shift
