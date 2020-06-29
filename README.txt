@@ -63,4 +63,11 @@ dosmc advantages over wcc and owcc in OpenWatcom:
 * dosmc uses the wcc command-line flags to generate small output by
   default.
 
+It's possible to write inline assembly snippets in your C code using #pragma
+aux (see dosmc.h for examples) and `__asm { ... }'. However, it's not
+possible to write entire functions in assembly, because there is no syntax
+for that in the OpenWatcom C language. Using entire .asm files as sources
+doesn't work either with dosmc, because wcc cannot compile them (and wasm
+is not included in dosmc).
+
 __END__
