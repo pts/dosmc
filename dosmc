@@ -23,11 +23,11 @@ unset MYDIR BTARG ARG EXT LASTARG SRC SRCBASE EXEOUT Q PL PLL NFARGC NASMCPU CPU
 
 MYDIR="${0%/*}"
 
-EXT=exe; Q=-q; CPUF=-0
+EXT=exe; Q=-q; CPUF=-0; PL=-ce
 # Specify these interesting wcc or wcl flags near the beginning.
 while test $# != 0; do
   case "$1" in
-   -pl | -zs | -c) PL="$1" ;;  # Do preprocessor, syntax check or compile only.
+   -pl | -zs | -c | -ce | -cn) PL="$1" ;;  # Do preprocessor, syntax check, compile only, emit exec without nasm (nonstandard), emit exec with nasm (nonstandard).
    -q) Q=-q ;;  # Quiet. Default.
    -nq) Q= ;;
    -bt=dos | -bt=exe) EXT=exe  ;; # Default.
@@ -83,9 +83,8 @@ SRC="$LASTARG"; SRCBASE="${SRC%.*}"
 if ! test -f "$SRC"; then
   echo "$0: fatal: source file missing: $SRC" >&2
 fi
-if test "$PL"; then  # Preprocessor only.
+if test "$PL" != -cn && test "$PL" != -ce; then
   if test "$PL" = -c; then
-    PLL=
     test "$EXEOUT" || EXEOUT="$SRCBASE.obj"
   else
     PLL="$PL"
@@ -100,13 +99,14 @@ test "$EXT" = com && set -- -D__DOSMC_COM__ "$@"
 NASMCPU=8086
 test "$CPUF" = -0 || NASMCPU="${CPUF#-}86"
 
-OBJ2NASM_CODE='
+LINKER_CODE='
   BEGIN { $^W = 1 }
   use integer;
   use strict;
 
-  my $EXT = $ARGV[0]; my $NASMCPU = $ARGV[1];
-  die "$0: fatal: missing args\n" if @ARGV != 2;
+  die "$0: fatal: missing args\n" if @ARGV != 3;
+  my($EXT, $NASMCPU, $is_nasm) = @ARGV;
+  die "$0: fatal: unknown EXT: $EXT\n" if $EXT ne "exe" and $EXT ne "com";
 
   # Based on: https://pierrelib.pagesperso-orange.fr/exec_formats/OMF_v1.1.pdf
   my $f = \*STDIN;
@@ -118,7 +118,7 @@ OBJ2NASM_CODE='
   my @segment_names = ("-SN");
   my %ledata = map { $_ => "" } @SEGMENT_ORDER;  # $segment_name => $ledata_str.
   my %symbol_ofs;   # $symbol => $ofs.
-  my %segment_symbols = map { $_ => [] } @SEGMENT_ORDER;  # $segment_name => [$symbol, ...].
+  my %segment_symbols = map { $_ => [] } @SEGMENT_ORDER;  # $segment_name => [[$ofs, $symbol], ...].
   my @extdef = ("-ED");
   my %fixupp = map { $_ => [] } @SEGMENT_ORDER;  # $segment_name => [[$endofs, $ltypem, $label], ...].
   my($last_segment_name, $last_ofs);
@@ -285,7 +285,11 @@ OBJ2NASM_CODE='
   my @undefined_symbols = sort keys %undefined_symbols;
   die "$0: fatal: undefined symbols: @undefined_symbols\n" if @undefined_symbols;
 
-  sub dump_segment($) {
+  my $entry_count = (defined($symbol_ofs{main_}) + defined($symbol_ofs{_main0_}));
+  die "$0: fatal: too many entry points (main functions)\n" if $entry_count > 1;
+  die "$0: fatal: missing entry point (main function)\n" if $entry_count == 0;
+
+  sub emit_nasm_segment($) {
     my $segment_name = $_[0];
     my $size = $segment_sizes{$segment_name};
     print "OBJ_SEGMENT_${segment_name}_start:\n";
@@ -311,7 +315,6 @@ OBJ2NASM_CODE='
       my $line = unpack("H*", substr($data, $i, $j - $i)); $line =~ s@(..)(?=.)@$1, 0x@sg; print "db 0x$line\n";
       $i = $j;
     };
-    my @L = map { $_->[0] } @symbols;
     while ($si < @symbols) {
       my $j = $symbols[$si][0];
       if ($j > $size or $j < $i) {
@@ -326,10 +329,11 @@ OBJ2NASM_CODE='
     $chunk_sub->($size) if $size > $i;
   }
 
-  my($fullprog_code, $fullprog_data, $fullprog_bss, $fullprog_end);
-  # No need to disambiguate NASM symbols like code_end, because
-  # wcc adds _ prefix or suffix to all symbols (including static ones).
-  if ($EXT eq "exe") {
+  sub emit_nasm() {
+    my($fullprog_code, $fullprog_data, $fullprog_bss, $fullprog_end);
+    # No need to disambiguate NASM symbols like code_end, because
+    # wcc adds _ prefix or suffix to all symbols (including static ones).
+    if ($EXT eq "exe") {
 # Based on https://github.com/pts/pts-nasm-fullprog/blob/master/fullprog_dosexe.inc.nasm
 $fullprog_code = q(
 section .text align=1 vstart=-0x10
@@ -375,7 +379,7 @@ bss_end:
 ; Fails with `error: TIMES value -... is negative` if data is too large (>~64 KiB).
 times -(((bss_end-bss_start)+(data_end-data_start))>>16) db 0
 );
-  } elsif ($EXT eq "com") {
+    } elsif ($EXT eq "com") {
 # Based on https://github.com/pts/pts-nasm-fullprog/blob/master/fullprog_dosexe.inc.nasm
 $fullprog_code = q(
 section .text align=1 vstart=0x100  ; org 0x100
@@ -406,35 +410,114 @@ call__fullprog_end:  ; Make fullprog_code without fullprog_end fail.
 ; (http://www.fysnet.net/yourhelp.htm).
 times -(((bss_end-bss_start)+(data_end-data_start)+(code_end-code_start+0x100)+3)>>16) db 0
 );
-  } else {
-    die "$0: fatal: unknown EXT: $EXT\n";
-  }
-  print qq(bits 16\ncpu $NASMCPU\n);
-  print qq($fullprog_code\n);
-  print qq(cld\npush es\npush ds\npop es\nmov di, bss_start\nmov cx, (stack-bss_start+1)>>1\nxor ax, ax\nrep stosw\npop es\n);
+    } else {
+      die "$0: fatal: unknown EXT: $EXT\n";
+    }
+    print qq(bits 16\ncpu $NASMCPU\n);
+    print qq($fullprog_code\n);
+    print qq(cld\npush es\npush ds\npop es\nmov di, bss_start\nmov cx, (stack-bss_start+1)>>1\nxor ax, ax\nrep stosw\npop es\n);
 
-  my $entry_count = (defined($symbol_ofs{main_}) + defined($symbol_ofs{_main0_}));
-  die "$0: fatal: too many entry points (main functions)\n" if $entry_count > 1;
-  if (defined($symbol_ofs{main_})) {
-    # `xor dx, dx` sets argv to NULL. ax is already 0 (for argc).
-    # OpenWatcom wcc does not support non-constant initializers, so we can call
-    # main now.
-    print "xor dx, dx\ncall main_\nmov ah, 0x4c  ; EXIT, exit code in al\nint 0x21\n";
-  } elsif (defined($symbol_ofs{_main0_})) {
-    print qq(db 0xE8\ndw 0x0000+_main0_-\(\$+2\)  ; call _main0_\nmov ah, 0x4c  ; EXIT, exit code in al\nint 0x21\n);
-  } else {
-    die "$0: fatal: missing entry point (main function)\n";
+    if (defined($symbol_ofs{main_})) {  # TODO(pts): Keep these consistent with emit_executable.
+      # `xor dx, dx` sets argv to NULL. ax is already 0 (for argc).
+      # OpenWatcom wcc does not support non-constant initializers, so we can call
+      # main now.
+      print "xor dx, dx\ncall main_\nmov ah, 0x4c  ; EXIT, exit code in al\nint 0x21\n";
+    } elsif (defined($symbol_ofs{_main0_})) {
+      print qq(db 0xE8\ndw 0x0000+_main0_-\(\$+2\)  ; call _main0_\nmov ah, 0x4c  ; EXIT, exit code in al\nint 0x21\n);
+    }
+    emit_nasm_segment("_TEXT");
+    print qq($fullprog_data\n);
+    emit_nasm_segment("CONST");  # String literals.
+    emit_nasm_segment("CONST2");  # Other global consts.
+    emit_nasm_segment("_DATA");
+    print qq($fullprog_bss\n);
+    emit_nasm_segment("_BSS");
+    print qq($fullprog_end\n);
   }
-  dump_segment("_TEXT");
-  print qq($fullprog_data\n);
-  dump_segment("CONST");  # String literals.
-  dump_segment("CONST2");  # Other global consts.
-  dump_segment("_DATA");
-  print qq($fullprog_bss\n);
-  dump_segment("_BSS");
-  print qq($fullprog_end\n);
+
+  sub emit_executable() {
+    my $exe_header = "";
+    my $vofs = 0;
+    if ($EXT eq "exe") {
+      $exe_header = pack("a24", "");  # Affected by fixups below.
+      $exe_header .= "\x16\x1F";  # push ss; pop ds
+      $vofs += length($exe_header) - 16;
+    } else {
+      $vofs = 0x100;
+    }
+    # qq(cld\npush es\npush ds\npop es\nmov di, bss_start\nmov cx, (stack-bss_start+1)>>1\nxor ax, ax\nrep stosw\npop es\n);
+    my $clear_bss = pack("a5va1va5", "\xFC\x06\x1E\x07\xBF", 0, "\xB9", 0, "\x31\xC0\xF3\xAB\x07");  # Affected by fixups below.
+    my %segment_vofs;
+    $segment_vofs{clear_bss} = $vofs;
+    $segment_vofs{call_main} = $vofs += length($clear_bss);
+    # $call_main is affected by fixups below.
+    my($call_main, $call_main_symbol, $call_main_ofs);
+    if (defined($symbol_ofs{main_})) {
+      # `xor dx, dx` sets argv to NULL. ax is already 0 (for argc).
+      # OpenWatcom wcc does not support non-constant initializers, so we can call
+      # main now.
+      # "xor dx, dx\ncall main_\nmov ah, 0x4c  ; EXIT, exit code in al\nint 0x21\n";
+      $call_main = pack("a3va4", "\x31\xD2\xE8", 0, "\xB4\x4C\xCD\x21");
+      $call_main_symbol = "main_"; $call_main_ofs = 3;
+    } elsif (defined($symbol_ofs{_main0_})) {
+      # qq(db 0xE8\ndw 0x0000+_main0_-\(\$+2\)  ; call _main0_\nmov ah, 0x4c  ; EXIT, exit code in al\nint 0x21\n);
+      $call_main = pack("ava4", "\xE8", 0, "\xB4\x4C\xCD\x21");
+      $call_main_symbol = "_main0_"; $call_main_ofs = 1;
+    }
+    $segment_vofs{_TEXT} = $vofs += length($call_main);
+    $vofs += length($ledata{_TEXT});
+    my $after_text_vofs = $vofs;
+    $vofs &= 15 if $EXT eq "exe";
+    my $dgroup_vofs = $segment_vofs{CONST} = $vofs;
+    $segment_vofs{CONST2} = $vofs += length($ledata{CONST});
+    $segment_vofs{_DATA} = $vofs += length($ledata{CONST2});
+    $segment_vofs{_BSS} = $vofs += length($ledata{_DATA});
+    $vofs += $segment_sizes{_BSS};
+    my %symbol_vofs;  # $symbol => $vofs + $obj_ofs.
+    for my $segment_name (keys %segment_symbols) {
+      my $this_segment_vofs = $segment_vofs{$segment_name};
+      $symbol_vofs{"OBJ_SEGMENT_${segment_name}_start"} = $this_segment_vofs;
+      for my $pair (@{$segment_symbols{$segment_name}}) {
+        my($ofs, $symbol) = @$pair;
+        $symbol_vofs{$symbol} = $this_segment_vofs + $ofs;
+      }
+    }
+    my $data_size = $segment_sizes{CONST} + $segment_sizes{CONST2} + $segment_sizes{_DATA};
+    die "$0: fatal: data too large\n" if $data_size + $segment_sizes{_BSS} > 65535;  # !! Allow 65536, also in nasm.
+    die "$0: fatal: code too large\n" if $after_text_vofs > 65535;  # !! Allow 65536, also in nasm.
+    die "$0: fatal: code+data too large for .com\n" if $EXT ne "exe" and $vofs > 65535;
+    my $stack_size = 65535 - ($data_size + $segment_sizes{_BSS} + ($EXT eq "exe" ? 0 : 3 + $after_text_vofs));
+    die "$0: fatal: stack too small (code and data too large)\n" if $stack_size < 10;
+    if ($EXT eq "exe") {
+      my $image_size = length($exe_header) + length($clear_bss) + length($call_main) + $segment_sizes{_TEXT} + $data_size;
+      substr($exe_header, 0, 24) = pack("a2v11", "MZ", $image_size & 511, ($image_size + 511) >> 9, 0, 1,
+          ($segment_sizes{_BSS} + $stack_size + 15-(-($data_size + $after_text_vofs) & 15)) >> 4,
+          0xffff, $after_text_vofs >> 4, $data_size + $segment_sizes{_BSS} + $stack_size, 0, 8, 0);
+    }
+    substr($clear_bss, 5, 2) = pack("v", $segment_vofs{_BSS});
+    substr($clear_bss, 8, 2) = pack("v", ($vofs - $segment_vofs{_BSS}) >> 1);
+    substr($call_main, $call_main_ofs, 2) = pack("v", $symbol_vofs{$call_main_symbol} - ($call_main_ofs + 2 + $segment_vofs{call_main}));
+    print $exe_header;
+    print $clear_bss;
+    print $call_main;
+    for my $segment_name (@SEGMENT_ORDER) {
+      my $data = $ledata{$segment_name};
+      my $this_segment_vofs = $segment_vofs{$segment_name};
+      for my $fixup (@{$fixupp{$segment_name}}) {  # Apply fixups.
+        my($endofs, $ofs, $ltypem, $symbol) = @$fixup;
+        die "$0: assert: bad endofs in fixup\n" if $endofs > length($data);
+        die "$0: assert: unknown symbol in fixup: $symbol\n" if !defined($symbol_vofs{$symbol});
+        my $svofs = $symbol_vofs{$symbol} + unpack("v", substr($data, $ofs, 2));
+        $svofs -= $endofs + $this_segment_vofs if $ltypem < 0;
+        substr($data, $ofs, 2) = pack("v", $svofs);
+      }
+      print $data;
+    }
+  }
+
+  $is_nasm ? emit_nasm() : emit_executable()
 '
-export OBJ2NASM_CODE
+export LINKER_CODE
 
 test "$Q" || set -x  # echo commands run.
 
@@ -464,14 +547,20 @@ if ! "$MYDIR"/ow2bin/wcc $Q $PLL -bt=dos -ms -i="$MYDIR" -s -os -W -w4 -wx -we -
   echo "$0: fatal: wcc failed" >&2
   exit 2
 fi
-if test -z "$PL"; then
+if test "$PL" = -ce; then
+  if ! perl -e 'eval $ENV{LINKER_CODE}; die $@ if $@' -- "$EXT" "$NASMCPU" 0 <"$SRCBASE.tmp.obj" >"$EXEOUT"; then
+    test "$Q" || set +x  # Don't echo commands run anymore.
+    echo "$0: fatal: obj2executable failed" >&2
+    exit 4
+  fi
+elif test "$PL" = -cn; then
   #if ! "$MYDIR"/ow2bin/wdis -a -fi -i=@ "$SRCBASE.tmp.obj" >"$SRCBASE.tmp.wasm"; then die...; fi
-  if ! perl -e 'eval $ENV{OBJ2NASM_CODE}; die $@ if $@' -- "$EXT" "$NASMCPU" <"$SRCBASE.tmp.obj" >"$SRCBASE.tmp.nasm"; then
+  if ! perl -e 'eval $ENV{LINKER_CODE}; die $@ if $@' -- "$EXT" "$NASMCPU" 1 <"$SRCBASE.tmp.obj" >"$SRCBASE.tmp.nasm"; then
     test "$Q" || set +x  # Don't echo commands run anymore.
     echo "$0: fatal: obj2nasm failed" >&2
     exit 4
   fi
-  if ! nasm -f bin -I "$MYDIR" -DNASM_EXT_"$EXT" -DNASM_CPU="$NASMCPU" -o "$EXEOUT" "$SRCBASE.tmp.nasm"; then
+  if ! nasm -f bin -I "$MYDIR" -o "$EXEOUT" "$SRCBASE.tmp.nasm"; then
     test "$Q" || set +x  # Don't echo commands run anymore.
     echo "$0: fatal: nasm failed" >&2
     exit 5

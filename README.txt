@@ -29,8 +29,6 @@ dosmc limitations:
   on other Unix systems on which wcc is available.)
 * It depends on Perl (standard packages only).
 * It depends on the wcc C compiler in OpenWatcom V2.
-* It depends on nasm (NASM, Netwide Assembler). This dependency will be
-  removed in the future.
 * Target is DOS 8086 (16-bit) .exe or DOS 8086 (16-bit) .com.
 * Only 2 memory models are supported: tiny for .com executables (maximum
   size of code + data + stack is ~63 KiB), and small for .exe executables
