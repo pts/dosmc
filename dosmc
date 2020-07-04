@@ -303,6 +303,11 @@ LINKER_CODE='
   die "$0: fatal: too many entry points (main functions)\n" if $entry_count > 1;
   die "$0: fatal: missing entry point (main function)\n" if $entry_count == 0;
 
+  my $need_clear_ax = (defined($symbol_ofs{main_}) and $do_use_argc);
+  my $do_clear_bss = $segment_sizes{_BSS} + ($need_clear_ax << 1) > 14;  # 14 == length($clear_bss_full).
+  # _DATA comes before _BSS in @SEGMENT_ORDER, move all (\0) bytes from _BSS to _DATA.
+  if (!$do_clear_bss) { $ledata{_DATA} .= "\0" x $segment_sizes{_BSS}; $segment_sizes{_DATA} += $segment_sizes{_BSS}; $segment_sizes{_BSS} = 0; }
+
   sub emit_nasm_segment($) {
     my $segment_name = $_[0];
     my $size = $segment_sizes{$segment_name};
@@ -342,11 +347,6 @@ LINKER_CODE='
     }
     $chunk_sub->($size) if $size > $i;
   }
-
-  my $need_clear_ax = (defined($symbol_ofs{main_}) and $do_use_argc);
-  my $do_clear_bss = $segment_sizes{_BSS} + ($need_clear_ax << 1) > 14;  # 14 == length($clear_bss_full).
-  # _DATA comes before _BSS in @SEGMENT_ORDER, move all (\0) bytes from _BSS to _DATA.
-  if (!$do_clear_bss) { $ledata{_DATA} .= "\0" x $segment_sizes{_BSS}; $segment_sizes{_DATA} += $segment_sizes{_BSS}; $segment_sizes{_BSS} = 0; }
 
   sub emit_nasm() {
     my($fullprog_code, $fullprog_data, $fullprog_bss, $fullprog_end);
