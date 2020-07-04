@@ -7,8 +7,6 @@
 # !! Optimize away extra exit after _start.
 # !! Optimize away `pop ...' registers at end of _start.
 # !! Optimize `mov al, ...; mov ah, ...' at end of main and _start.
-# !! Change .bss do .data (\0) for short .bss.
-# !! Omit the zero-initialize if .bss is empty or it contains argv only. But keep ax=0 as argc for main if needed.
 # !! Add option for word alignment of data segments, for speed.
 # !! TODO(pts): Add automatic argv splitting for main, but keep using argc=0 and argv=NULL if -D_STUBARG_MAIN, and keep these unspecified if -D_NOARG_MAIN.
 # !! Is cld needed? At least optimize it away if there are no string instructions.
@@ -345,6 +343,11 @@ LINKER_CODE='
     $chunk_sub->($size) if $size > $i;
   }
 
+  my $need_clear_ax = (defined($symbol_ofs{main_}) and $do_use_argc);
+  my $do_clear_bss = $segment_sizes{_BSS} + ($need_clear_ax << 1) > 14;  # 14 == length($clear_bss_full).
+  # _DATA comes before _BSS in @SEGMENT_ORDER, move all (\0) bytes from _BSS to _DATA.
+  if (!$do_clear_bss) { $ledata{_DATA} .= "\0" x $segment_sizes{_BSS}; $segment_sizes{_DATA} += $segment_sizes{_BSS}; $segment_sizes{_BSS} = 0; }
+
   sub emit_nasm() {
     my($fullprog_code, $fullprog_data, $fullprog_bss, $fullprog_end);
     # No need to disambiguate NASM symbols like code_end, because
@@ -429,8 +432,12 @@ times -(((bss_end-bss_start)+(data_end-data_start)+(code_end-code_start+0x100)+3
     }
     print qq(bits 16\ncpu $NASMCPU\n);
     print qq($fullprog_code\n);
-    print qq(cld\npush es\npush ds\npop es\nmov di, bss_start\nmov cx, (stack-bss_start+1)>>1\nxor ax, ax\nrep stosw\npop es\n);  # clear_bss.
-
+    print qq(cld\n);
+    if ($do_clear_bss) {
+      print qq(push es\npush ds\npop es\nmov di, bss_start\nmov cx, (stack-bss_start+1)>>1\nxor ax, ax\nrep stosw\npop es\n);  # clear_bss.
+    } elsif ($need_clear_ax) {
+      print qq(db 0x31, 0xC0  ; xor ax, ax\n  ; argc=0);
+    }
     if (defined($symbol_ofs{_start_})) {  # TODO(pts): Keep these consistent with emit_executable.
       if ($is_exe) {
         print qq(db 0xE8\ndw 0x0000+_start_-\(\$+2\)  ; call _start_\n);
@@ -440,10 +447,9 @@ times -(((bss_end-bss_start)+(data_end-data_start)+(code_end-code_start+0x100)+3
         print qq(db 0xE9\ndw 0x0000+_start_-\(\$+2\)  ; jmp strict dword _start_\n);
       }
     } elsif (defined($symbol_ofs{main_}) and $do_use_argc) {
-      # `xor dx, dx` sets argv to NULL. ax is already 0 (for argc) because of clear_bss.
       # OpenWatcom wcc does not support non-constant initializers, so we can call
       # main now.
-      print qq(xor dx, dx\ncall main_\nmov ah, 0x4c  ; EXIT, exit code in al\nint 0x21\n);
+      print qq(xor dx, dx\ncall main_\nmov ah, 0x4c  ; dx: argv=NULL; EXIT, exit code in al\nint 0x21\n);
     } elsif (defined($symbol_ofs{main_})) {
       print qq(call main_\nmov ah, 0x4c  ; EXIT, exit code in al\nint 0x21\n);
     }
@@ -462,7 +468,8 @@ times -(((bss_end-bss_start)+(data_end-data_start)+(code_end-code_start+0x100)+3
     $init_regs .= "\x16\x1F" if $is_exe;  # push ss; pop ds
     $init_regs .= "\xFC";  # cld
     # push ds;; pop es;; mov di, bss_start;; mov cx, (stack-bss_start+1)>>1;; xor ax, ax;; rep stosw;; pop es
-    my $clear_bss = pack("a4va1va5", "\x06\x1E\x07\xBF", 0, "\xB9", 0, "\x31\xC0\xF3\xAB\x07");  # Affected by fixups below.
+    my $clear_bss = $do_clear_bss ? pack("a4va1va5", "\x06\x1E\x07\xBF", 0, "\xB9", ($segment_sizes{_BSS} + 1) >> 1, "\x31\xC0\xF3\xAB\x07") :  # Affected by fixups below.
+        $need_clear_ax ? "\x31\xC0" : "";  # xor ax, ax  ; argc=0.
     # $call_main is affected by fixups below.
     my($call_main, $call_main_symbol, $call_main_ofs);
     if (defined($symbol_ofs{_start_})) {
@@ -481,11 +488,8 @@ times -(((bss_end-bss_start)+(data_end-data_start)+(code_end-code_start+0x100)+3
     } elsif (defined($symbol_ofs{main_}) and $do_use_argc) {
       # OpenWatcom wcc does not support non-constant initializers, so we can call
       # main now.
-      my $has_clear_bss_cleared_ax = 1;
-      my $maybe_clear_ax = $has_clear_bss_cleared_ax ? "" : "\x31\xC0";  # xor ax, ax  ; argc=0.
-      my $clear_dx = "\x31\xD2";  # xor dx, dx  ; argv=NULL.
-      # xor dx, dx;; call main_;; mov ah, 0x4c;; int 0x21  ; EXIT, exit code in al
-      $call_main = $maybe_clear_ax . $clear_dx . pack("ava4", "\xE8", 0, "\xB4\x4C\xCD\x21");
+      # xor dx, dx;; call main_;; mov ah, 0x4c;; int 0x21  ; dx: argv=NULL; EXIT, exit code in al
+      $call_main = pack("a3va4", "\x31\xD2\xE8", 0, "\xB4\x4C\xCD\x21");
       $call_main_symbol = "main_"; $call_main_ofs = length($call_main) - 6;
     } elsif (defined($symbol_ofs{main_})) {
       # call main_;; mov ah, 0x4c;; int 0x21  ; EXIT, exit code in al
@@ -524,8 +528,7 @@ times -(((bss_end-bss_start)+(data_end-data_start)+(code_end-code_start+0x100)+3
           0xffff, $after_text_vofs >> 4, $data_size + $segment_sizes{_BSS} + $stack_size, 0, 8, 0);
       print $exe_header;
     }
-    substr($clear_bss, 4, 2) = pack("v", $segment_vofs{_BSS});
-    substr($clear_bss, 7, 2) = pack("v", ($vofs - $segment_vofs{_BSS} + 1) >> 1);
+    substr($clear_bss, 4, 2) = pack("v", $segment_vofs{_BSS}) if length($clear_bss) >= 6;
     substr($call_main, $call_main_ofs, 2) = pack("v", $symbol_vofs{$call_main_symbol} - ($call_main_ofs + 2 + $segment_vofs{call_main})) if
         defined($call_main_ofs);
     print $init_regs, $clear_bss, $call_main;
