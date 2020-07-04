@@ -27,7 +27,7 @@ EXT=exe; Q=-q; CPUF=-0; PL=-ce
 # Specify these interesting wcc or wcl flags near the beginning.
 while test $# != 0; do
   case "$1" in
-   -pl | -zs | -c | -ce | -cn) PL="$1" ;;  # Do preprocessor, syntax check, compile only, emit exec without nasm (nonstandard), emit exec with nasm (nonstandard).
+   -pl | -zs | -c | -ce | -cn | -cw) PL="$1" ;;  # Do preprocessing (-pl), syntax check (-zs), compile to .obj (-c), emit exec without nasm (nonstandard) (-ce), emit exec with nasm (nonstandard) (-cw), compile to .wasm (nonstandard) (-cw).
    -q) Q=-q ;;  # Quiet. Default.
    -nq) Q= ;;
    -bt=dos | -bt=exe) EXT=exe  ;; # Default.
@@ -83,16 +83,19 @@ SRC="$LASTARG"; SRCBASE="${SRC%.*}"
 if ! test -f "$SRC"; then
   echo "$0: fatal: source file missing: $SRC" >&2
 fi
-if test "$PL" != -cn && test "$PL" != -ce; then
+if test "$PL" = -cn || test "$PL" = -ce; then
+  test "$EXEOUT" || EXEOUT="$SRCBASE.$EXT"
+  set -- -fo="$SRCBASE.tmp.obj" "$@"
+elif test "$PL" = -cw; then
+  test "$EXEOUT" || EXEOUT="$SRCBASE.wasm"
+  set -- -fo="$SRCBASE.tmp.obj" "$@"
+else
   if test "$PL" = -c; then
     test "$EXEOUT" || EXEOUT="$SRCBASE.obj"
   else
     PLL="$PL"
   fi
   test "$EXEOUT" && set -- -fo="$EXEOUT" "$@"
-else
-  test "$EXEOUT" || EXEOUT="$SRCBASE.$EXT"
-  set -- -fo="$SRCBASE.tmp.obj" "$@"
 fi
 set -- -D__DOSMC__ "$@"
 test "$EXT" = com && set -- -D__DOSMC_COM__ "$@"
@@ -554,16 +557,21 @@ if test "$PL" = -ce; then
     exit 4
   fi
 elif test "$PL" = -cn; then
-  #if ! "$MYDIR"/ow2bin/wdis -a -fi -i=@ "$SRCBASE.tmp.obj" >"$SRCBASE.tmp.wasm"; then die...; fi
   if ! perl -e 'eval $ENV{LINKER_CODE}; die $@ if $@' -- "$EXT" "$NASMCPU" 1 <"$SRCBASE.tmp.obj" >"$SRCBASE.tmp.nasm"; then
     test "$Q" || set +x  # Don't echo commands run anymore.
     echo "$0: fatal: obj2nasm failed" >&2
-    exit 4
+    exit 5
   fi
   if ! nasm -f bin -I "$MYDIR" -o "$EXEOUT" "$SRCBASE.tmp.nasm"; then
     test "$Q" || set +x  # Don't echo commands run anymore.
     echo "$0: fatal: nasm failed" >&2
-    exit 5
+    exit 6
+  fi
+elif test "$PL" = -cw; then
+  if ! "$MYDIR"/ow2bin/wdis -a -fi -i=@ "$SRCBASE.tmp.obj" >"$EXEOUT"; then
+    test "$Q" || set +x  # Don't echo commands run anymore.
+    echo "$0: fatal: wdis failed" >&2
+    exit 7
   fi
 fi
 test "$Q" || set +x  # Don't echo commands run anymore.
