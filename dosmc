@@ -495,7 +495,7 @@ times -(((bss_end-bss_start)+(data_end-data_start)+(code_end-code_start+0x100)+3
           0xffff, $after_text_vofs >> 4, $data_size + $segment_sizes{_BSS} + $stack_size, 0, 8, 0);
     }
     substr($clear_bss, 5, 2) = pack("v", $segment_vofs{_BSS});
-    substr($clear_bss, 8, 2) = pack("v", ($vofs - $segment_vofs{_BSS}) >> 1);
+    substr($clear_bss, 8, 2) = pack("v", ($vofs - $segment_vofs{_BSS} + 1) >> 1);
     substr($call_main, $call_main_ofs, 2) = pack("v", $symbol_vofs{$call_main_symbol} - ($call_main_ofs + 2 + $segment_vofs{call_main}));
     print $exe_header;
     print $clear_bss;
