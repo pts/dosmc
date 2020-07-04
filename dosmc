@@ -23,7 +23,7 @@ unset MYDIR BTARG ARG EXT LASTARG SRC SRCBASE EXEOUT Q PL PLL NFARGC NASMCPU CPU
 
 MYDIR="${0%/*}"
 
-EXT=exe; Q=-q; CPUF=-0; PL=-ce
+EXT=; Q=-q; CPUF=-0; PL=-ce
 # Specify these interesting wcc or wcl flags near the beginning.
 while test $# != 0; do
   case "$1" in
@@ -83,6 +83,12 @@ SRC="$LASTARG"; SRCBASE="${SRC%.*}"
 if ! test -f "$SRC"; then
   echo "$0: fatal: source file missing: $SRC" >&2
   exit 1
+fi
+if test -z "$EXT"; then
+  case "$EXEOUT" in
+   *.com | *.COM) EXT=com ;;
+   *) EXT=exe ;;
+  esac
 fi
 if test "$PL" = -cn || test "$PL" = -ce; then
   test "$EXEOUT" || EXEOUT="$SRCBASE.$EXT"
