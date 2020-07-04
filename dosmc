@@ -31,7 +31,7 @@ while test $# != 0; do
    -q) Q=-q ;;  # Quiet. Default.
    -nq) Q= ;;
    -bt=dos | -bt=exe) EXT=exe  ;; # Default.
-   -bt=com) EXT=com ;;
+   -bt=com | -mt) EXT=com ;;
    -fo=*) EXEOUT="${1#*=}" ;;
    -ms) ;;
    -m*) echo "$0: fatal: only -ms (small memory model) supported: $1" >&2; exit 1 ;;
