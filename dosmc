@@ -9,7 +9,9 @@
 # !! Optimize `mov al, ...; mov ah, ...' at end of main and _start.
 # !! Add option for word alignment of data segments, for speed.
 # !! TODO(pts): Add automatic argv splitting for main, but keep using argc=0 and argv=NULL if -D_STUBARG_MAIN, and keep these unspecified if -D_NOARG_MAIN.
-# !! Is cld needed? At least optimize it away if there are no string instructions.
+# !! Add disassembler to cld optimization (maybe_contains_8086_str).
+# !! Add disassembler to check that ds is not used in the .exe file, and optimize away `pop ds'. (Without a disassembler, even if _CONST, _CONST2 and _DATA are empty, pointers to local (on-stack) variables may be taken and they won't work.)
+# !! Optimize away everything if the first instruction by the entry point is `ret' or exit.
 #
 # !! Allow .obj files from NASM, give source example for section.
 # !! Allow .nasm source files, give source example for section.
@@ -303,10 +305,16 @@ LINKER_CODE='
   die "$0: fatal: too many entry points (main functions)\n" if $entry_count > 1;
   die "$0: fatal: missing entry point (main function)\n" if $entry_count == 0;
 
+  sub maybe_contains_8086_str($) {
+    # TODO(pts): Add proper 8080 disassembler for detecting these instructions.
+    $_[0] =~ y@\x6C-\x6F\xA4-\xA7\xAA-\xAF@@  # 8086 string instructions.
+  }
+
   my $need_clear_ax = (defined($symbol_ofs{main_}) and $do_use_argc);
   my $do_clear_bss = $segment_sizes{_BSS} + ($need_clear_ax << 1) > 14;  # 14 == length($clear_bss_full).
   # _DATA comes before _BSS in @SEGMENT_ORDER, move all (\0) bytes from _BSS to _DATA.
   if (!$do_clear_bss) { $ledata{_DATA} .= "\0" x $segment_sizes{_BSS}; $segment_sizes{_DATA} += $segment_sizes{_BSS}; $segment_sizes{_BSS} = 0; }
+  my $need_clear_df = ($do_clear_bss or maybe_contains_8086_str($ledata{_TEXT}));
 
   sub emit_nasm_segment($) {
     my $segment_name = $_[0];
@@ -432,7 +440,7 @@ times -(((bss_end-bss_start)+(data_end-data_start)+(code_end-code_start+0x100)+3
     }
     print qq(bits 16\ncpu $NASMCPU\n);
     print qq($fullprog_code\n);
-    print qq(cld\n);
+    print qq(cld\n) if $need_clear_df;
     if ($do_clear_bss) {
       print qq(push es\npush ds\npop es\nmov di, bss_start\nmov cx, (stack-bss_start+1)>>1\nxor ax, ax\nrep stosw\npop es\n);  # clear_bss.
     } elsif ($need_clear_ax) {
@@ -466,7 +474,7 @@ times -(((bss_end-bss_start)+(data_end-data_start)+(code_end-code_start+0x100)+3
   sub emit_executable() {
     my $init_regs = "";
     $init_regs .= "\x16\x1F" if $is_exe;  # push ss; pop ds
-    $init_regs .= "\xFC";  # cld
+    $init_regs .= "\xFC" if $need_clear_df;  # String instructions (e.g. movsb, stosw) need df=0 (cld).
     # push ds;; pop es;; mov di, bss_start;; mov cx, (stack-bss_start+1)>>1;; xor ax, ax;; rep stosw;; pop es
     my $clear_bss = $do_clear_bss ? pack("a4va1va5", "\x06\x1E\x07\xBF", 0, "\xB9", ($segment_sizes{_BSS} + 1) >> 1, "\x31\xC0\xF3\xAB\x07") :  # Affected by fixups below.
         $need_clear_ax ? "\x31\xC0" : "";  # xor ax, ax  ; argc=0.
@@ -531,6 +539,8 @@ times -(((bss_end-bss_start)+(data_end-data_start)+(code_end-code_start+0x100)+3
     substr($clear_bss, 4, 2) = pack("v", $segment_vofs{_BSS}) if length($clear_bss) >= 6;
     substr($call_main, $call_main_ofs, 2) = pack("v", $symbol_vofs{$call_main_symbol} - ($call_main_ofs + 2 + $segment_vofs{call_main})) if
         defined($call_main_ofs);
+    # Tiny version of
+    # https://github.com/open-watcom/open-watcom-v2/blob/master/bld/clib/startup/a/cstrt086.asm
     print $init_regs, $clear_bss, $call_main;
     for my $segment_name (@SEGMENT_ORDER) {
       my $data = $ledata{$segment_name};
