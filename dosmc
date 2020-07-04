@@ -458,20 +458,11 @@ times -(((bss_end-bss_start)+(data_end-data_start)+(code_end-code_start+0x100)+3
   }
 
   sub emit_executable() {
-    my $exe_header = "";
-    my $vofs = 0;
-    if ($is_exe) {
-      $exe_header = pack("a24", "");  # Affected by fixups below.
-      $exe_header .= "\x16\x1F";  # push ss; pop ds
-      $vofs += length($exe_header) - 16;
-    } else {
-      $vofs = 0x100;
-    }
-    # cld;; push es;; push ds;; pop es;; mov di, bss_start;; mov cx, (stack-bss_start+1)>>1;; xor ax, ax;; rep stosw;; pop es
-    my $clear_bss = pack("a5va1va5", "\xFC\x06\x1E\x07\xBF", 0, "\xB9", 0, "\x31\xC0\xF3\xAB\x07");  # Affected by fixups below.
-    my %segment_vofs;
-    $segment_vofs{clear_bss} = $vofs;
-    $segment_vofs{call_main} = $vofs += length($clear_bss);
+    my $init_regs = "";
+    $init_regs .= "\x16\x1F" if $is_exe;  # push ss; pop ds
+    $init_regs .= "\xFC";  # cld
+    # push ds;; pop es;; mov di, bss_start;; mov cx, (stack-bss_start+1)>>1;; xor ax, ax;; rep stosw;; pop es
+    my $clear_bss = pack("a4va1va5", "\x06\x1E\x07\xBF", 0, "\xB9", 0, "\x31\xC0\xF3\xAB\x07");  # Affected by fixups below.
     # $call_main is affected by fixups below.
     my($call_main, $call_main_symbol, $call_main_ofs);
     if (defined($symbol_ofs{_start_})) {
@@ -488,26 +479,29 @@ times -(((bss_end-bss_start)+(data_end-data_start)+(code_end-code_start+0x100)+3
         $call_main_symbol = "_start_"; $call_main_ofs = length($call_main) - 2;
       }
     } elsif (defined($symbol_ofs{main_}) and $do_use_argc) {
-      # `xor dx, dx` sets argv to NULL. ax is already 0 (for argc).
       # OpenWatcom wcc does not support non-constant initializers, so we can call
       # main now.
+      my $has_clear_bss_cleared_ax = 1;
+      my $maybe_clear_ax = $has_clear_bss_cleared_ax ? "" : "\x31\xC0";  # xor ax, ax  ; argc=0.
+      my $clear_dx = "\x31\xD2";  # xor dx, dx  ; argv=0.
       # xor dx, dx;; call main_;; mov ah, 0x4c;; int 0x21  ; EXIT, exit code in al
-      $call_main = pack("a3va4", "\x31\xD2\xE8", 0, "\xB4\x4C\xCD\x21");
+      $call_main = $maybe_clear_ax . $clear_dx . pack("ava4", "\xE8", 0, "\xB4\x4C\xCD\x21");
       $call_main_symbol = "main_"; $call_main_ofs = length($call_main) - 6;
     } elsif (defined($symbol_ofs{main_})) {
       # call main_;; mov ah, 0x4c;; int 0x21  ; EXIT, exit code in al
       $call_main = pack("a1va4", "\xE8", 0, "\xB4\x4C\xCD\x21");
       $call_main_symbol = "main_"; $call_main_ofs = length($call_main) - 6;
     }
-    $segment_vofs{_TEXT} = $vofs += length($call_main);
-    $vofs += length($ledata{_TEXT});
+    my $vofs = ($is_exe ? 8 : 0x100) + length($init_regs) + length($clear_bss);
+    my %segment_vofs;
+    $segment_vofs{call_main} = $vofs; $vofs += length($call_main);  # For the relocation below.
+    $segment_vofs{_TEXT} = $vofs; $vofs += length($ledata{_TEXT});
     my $after_text_vofs = $vofs;
     $vofs &= 15 if $is_exe;
-    my $dgroup_vofs = $segment_vofs{CONST} = $vofs;
-    $segment_vofs{CONST2} = $vofs += length($ledata{CONST});
-    $segment_vofs{_DATA} = $vofs += length($ledata{CONST2});
-    $segment_vofs{_BSS} = $vofs += length($ledata{_DATA});
-    $vofs += $segment_sizes{_BSS};
+    my $dgroup_vofs = $segment_vofs{CONST} = $vofs; $vofs += length($ledata{CONST});
+    $segment_vofs{CONST2} = $vofs; $vofs += length($ledata{CONST2});
+    $segment_vofs{_DATA} = $vofs; $vofs += length($ledata{_DATA});
+    $segment_vofs{_BSS} = $vofs; $vofs += $segment_sizes{_BSS};
     my %symbol_vofs;  # $symbol => $vofs + $obj_ofs.
     for my $segment_name (keys %segment_symbols) {
       my $this_segment_vofs = $segment_vofs{$segment_name};
@@ -524,18 +518,17 @@ times -(((bss_end-bss_start)+(data_end-data_start)+(code_end-code_start+0x100)+3
     my $stack_size = 65535 - ($data_size + $segment_sizes{_BSS} + ($is_exe ? 0 : 3 + $after_text_vofs));
     die "$0: fatal: stack too small (code and data too large)\n" if $stack_size < 10;
     if ($is_exe) {
-      my $image_size = length($exe_header) + length($clear_bss) + length($call_main) + $segment_sizes{_TEXT} + $data_size;
-      substr($exe_header, 0, 24) = pack("a2v11", "MZ", $image_size & 511, ($image_size + 511) >> 9, 0, 1,
+      my $image_size = 24 + length($init_regs) + length($clear_bss) + length($call_main) + $segment_sizes{_TEXT} + $data_size;
+      my $exe_header = pack("a2v11", "MZ", $image_size & 511, ($image_size + 511) >> 9, 0, 1,
           ($segment_sizes{_BSS} + $stack_size + 15-(-($data_size + $after_text_vofs) & 15)) >> 4,
           0xffff, $after_text_vofs >> 4, $data_size + $segment_sizes{_BSS} + $stack_size, 0, 8, 0);
+      print $exe_header;
     }
-    substr($clear_bss, 5, 2) = pack("v", $segment_vofs{_BSS});
-    substr($clear_bss, 8, 2) = pack("v", ($vofs - $segment_vofs{_BSS} + 1) >> 1);
+    substr($clear_bss, 4, 2) = pack("v", $segment_vofs{_BSS});
+    substr($clear_bss, 7, 2) = pack("v", ($vofs - $segment_vofs{_BSS} + 1) >> 1);
     substr($call_main, $call_main_ofs, 2) = pack("v", $symbol_vofs{$call_main_symbol} - ($call_main_ofs + 2 + $segment_vofs{call_main})) if
         defined($call_main_ofs);
-    print $exe_header;
-    print $clear_bss;
-    print $call_main;
+    print $init_regs, $clear_bss, $call_main;
     for my $segment_name (@SEGMENT_ORDER) {
       my $data = $ledata{$segment_name};
       my $this_segment_vofs = $segment_vofs{$segment_name};
