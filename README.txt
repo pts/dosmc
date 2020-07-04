@@ -83,7 +83,7 @@ Program entry points for dosmc (choose any):
 * int main(void) { ... }. Return exit code (0 means success).
   Command-line arguments are not parsed or passed.
 * int main(int argc, char **argv) { ... }. Return exit code (0 means success).
-  Command-line arguments are currently stubbed (argc=0, argv=0), will be
+  Command-line arguments are currently stubbed (argc=0, argv=NULL), will be
   parsed and passed in the future. DOS supports a command-line up to 127
   bytes (excluding argv[0], the program name). When parsing this, the
   dosmc C library splits on spaces and tab, except if the entire argument

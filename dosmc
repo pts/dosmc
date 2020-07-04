@@ -10,7 +10,7 @@
 # !! Change .bss do .data (\0) for short .bss.
 # !! Omit the zero-initialize if .bss is empty or it contains argv only. But keep ax=0 as argc for main if needed.
 # !! Add option for word alignment of data segments, for speed.
-# !! TODO(pts): Add automatic argv splitting for main, but keep using argc=0 and argv=0 if -D_STUBARG_MAIN, and keep these unspecified if -D_NOARG_MAIN.
+# !! TODO(pts): Add automatic argv splitting for main, but keep using argc=0 and argv=NULL if -D_STUBARG_MAIN, and keep these unspecified if -D_NOARG_MAIN.
 # !! Is cld needed? At least optimize it away if there are no string instructions.
 #
 # !! Allow .obj files from NASM, give source example for section.
@@ -483,7 +483,7 @@ times -(((bss_end-bss_start)+(data_end-data_start)+(code_end-code_start+0x100)+3
       # main now.
       my $has_clear_bss_cleared_ax = 1;
       my $maybe_clear_ax = $has_clear_bss_cleared_ax ? "" : "\x31\xC0";  # xor ax, ax  ; argc=0.
-      my $clear_dx = "\x31\xD2";  # xor dx, dx  ; argv=0.
+      my $clear_dx = "\x31\xD2";  # xor dx, dx  ; argv=NULL.
       # xor dx, dx;; call main_;; mov ah, 0x4c;; int 0x21  ; EXIT, exit code in al
       $call_main = $maybe_clear_ax . $clear_dx . pack("ava4", "\xE8", 0, "\xB4\x4C\xCD\x21");
       $call_main_symbol = "main_"; $call_main_ofs = length($call_main) - 6;

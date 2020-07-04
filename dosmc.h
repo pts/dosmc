@@ -1,6 +1,12 @@
 #ifndef _DOSMC_H_
 #define _DOSMC_H_ 1
 
+#ifdef __cplusplus
+#define NULL 0
+#else
+#define NULL ((void *)0)  /* stdlib.h */
+#endif
+
 static inline int _printmsgx(const char *msg);
 #pragma aux _printmsgx = \
 "mov ah, 9" /* WRITE_STDOUT */ \
