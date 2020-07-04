@@ -107,6 +107,7 @@ LINKER_CODE='
   use integer;
   use strict;
 
+  $0 = "dosmc-linker-"; $0 .= $ARGV[0] if @ARGV; $0 .= "-nasm" if $ARGV[2];
   die "$0: fatal: missing args\n" if @ARGV != 3;
   my($EXT, $NASMCPU, $is_nasm) = @ARGV;
   die "$0: fatal: unknown EXT: $EXT\n" if $EXT ne "exe" and $EXT ne "com";
