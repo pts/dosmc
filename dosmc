@@ -32,7 +32,7 @@ while test $# != 0; do
    -nq) Q= ;;
    -bt=dos | -bt=exe) EXT=exe  ;; # Default.
    -bt=com | -mt) EXT=com ;;
-   -fo=*) EXEOUT="${1#*=}" ;;
+   -fo=* | -fe=*) EXEOUT="${1#*=}" ;;  # `wcc -fo=...' for object files; `wcl -fe=...' for executable files. For dosmc, it's final output file.
    -ms) ;;
    -m*) echo "$0: fatal: only -ms (small memory model) supported: $1" >&2; exit 1 ;;
    -[0-6]) CPUF="$1" ;;
