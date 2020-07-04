@@ -271,6 +271,8 @@ LINKER_CODE='
   }
 
   for my $segment_name (@SEGMENT_ORDER) {
+    # Typically $segment_sizes{_BSS} is missing, put it back.
+    $segment_sizes{$segment_name} = 0 if !exists($segment_sizes{$segment_name});
     my $size = $segment_name eq "_BSS" ? 0 : $segment_sizes{$segment_name};
     die "$0: fatal: segment size mismatch for $segment_name\n" if
         length($ledata{$segment_name}) != $size;
