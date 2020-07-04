@@ -3,7 +3,7 @@
 #
 # TODOs:
 #
-# !! Optimize away call in entry point of main and _start.
+# !! Optimize away call in entry point of main and _start. This can be tricky and needs smart disassembly, for example in examples/m0f.c, code of _start and double_int overlap.
 # !! Optimize away extra exit after _start.
 # !! Optimize away `pop ...' registers at end of _start.
 # !! Optimize `mov al, ...; mov ah, ...' at end of main and _start.
@@ -111,6 +111,7 @@ LINKER_CODE='
   die "$0: fatal: missing args\n" if @ARGV != 3;
   my($EXT, $NASMCPU, $is_nasm) = @ARGV;
   die "$0: fatal: unknown EXT: $EXT\n" if $EXT ne "exe" and $EXT ne "com";
+  my $is_exe = $EXT eq "exe";  # Otherwise .com.
 
   # Based on: https://pierrelib.pagesperso-orange.fr/exec_formats/OMF_v1.1.pdf
   my $f = \*STDIN;
@@ -341,7 +342,7 @@ LINKER_CODE='
     my($fullprog_code, $fullprog_data, $fullprog_bss, $fullprog_end);
     # No need to disambiguate NASM symbols like code_end, because
     # wcc adds _ prefix or suffix to all symbols (including static ones).
-    if ($EXT eq "exe") {
+    if ($is_exe) {
 # Based on https://github.com/pts/pts-nasm-fullprog/blob/master/fullprog_dosexe.inc.nasm
 $fullprog_code = q(
 section .text align=1 vstart=-0x10
@@ -387,7 +388,7 @@ bss_end:
 ; Fails with `error: TIMES value -... is negative` if data is too large (>~64 KiB).
 times -(((bss_end-bss_start)+(data_end-data_start))>>16) db 0
 );
-    } elsif ($EXT eq "com") {
+    } else {  # .com
 # Based on https://github.com/pts/pts-nasm-fullprog/blob/master/fullprog_dosexe.inc.nasm
 $fullprog_code = q(
 section .text align=1 vstart=0x100  ; org 0x100
@@ -418,16 +419,19 @@ call__fullprog_end:  ; Make fullprog_code without fullprog_end fail.
 ; (http://www.fysnet.net/yourhelp.htm).
 times -(((bss_end-bss_start)+(data_end-data_start)+(code_end-code_start+0x100)+3)>>16) db 0
 );
-    } else {
-      die "$0: fatal: unknown EXT: $EXT\n";
     }
     print qq(bits 16\ncpu $NASMCPU\n);
     print qq($fullprog_code\n);
     print qq(cld\npush es\npush ds\npop es\nmov di, bss_start\nmov cx, (stack-bss_start+1)>>1\nxor ax, ax\nrep stosw\npop es\n);  # clear_bss.
 
     if (defined($symbol_ofs{_start_})) {  # TODO(pts): Keep these consistent with emit_executable.
-      print qq(db 0xE8\ndw 0x0000+_start_-\(\$+2\)  ; call _start_\n);
-      print qq(db 0xB8, 0, 0x4C, 0xCD, 0x21  ; mov ax, 0x4c00;; int 0x21  ; EXIT with code 0.\n);
+      if ($is_exe) {
+        print qq(db 0xE8\ndw 0x0000+_start_-\(\$+2\)  ; call _start_\n);
+        print qq(db 0xB8, 0, 0x4C, 0xCD, 0x21  ; mov ax, 0x4c00;; int 0x21  ; EXIT with code 0.\n);
+      } elsif ($symbol_ofs{_start_} == 0) {  # Code starts with _start.
+      } else {
+        print qq(db 0xE9\ndw 0x0000+_start_-\(\$+2\)  ; jmp strict dword _start_\n);
+      }
     } elsif (defined($symbol_ofs{main_}) and $do_use_argc) {
       # `xor dx, dx` sets argv to NULL. ax is already 0 (for argc) because of clear_bss.
       # OpenWatcom wcc does not support non-constant initializers, so we can call
@@ -449,7 +453,7 @@ times -(((bss_end-bss_start)+(data_end-data_start)+(code_end-code_start+0x100)+3
   sub emit_executable() {
     my $exe_header = "";
     my $vofs = 0;
-    if ($EXT eq "exe") {
+    if ($is_exe) {
       $exe_header = pack("a24", "");  # Affected by fixups below.
       $exe_header .= "\x16\x1F";  # push ss; pop ds
       $vofs += length($exe_header) - 16;
@@ -464,9 +468,18 @@ times -(((bss_end-bss_start)+(data_end-data_start)+(code_end-code_start+0x100)+3
     # $call_main is affected by fixups below.
     my($call_main, $call_main_symbol, $call_main_ofs);
     if (defined($symbol_ofs{_start_})) {
-      # call _start_;; mov ax, 0x4c00;; int 0x21  ; EXIT with code 0.
-      $call_main = pack("ava5", "\xE8", 0, "\xB8\x00\x4C\xCD\x21");
-      $call_main_symbol = "_start_"; $call_main_ofs = length($call_main) - 7;
+      if ($is_exe) {
+        # call _start_;; mov ax, 0x4c00;; int 0x21  ; EXIT with code 0.
+        $call_main = pack("ava5", "\xE8", 0, "\xB8\x00\x4C\xCD\x21");
+        $call_main_symbol = "_start_"; $call_main_ofs = length($call_main) - 7;
+      } elsif ($symbol_ofs{_start_} == 0) {  # Code starts with _start.
+        $call_main = ""; $call_main_symbol = $call_main_ofs = undef;
+      } else {
+        # TODO(pts): Instead of the jmp, move the code of $clear_bss and $call_main just above _start.
+        # jmp strict word start_
+        $call_main = pack("a1v", "\xE9", 0);
+        $call_main_symbol = "_start_"; $call_main_ofs = length($call_main) - 2;
+      }
     } elsif (defined($symbol_ofs{main_}) and $do_use_argc) {
       # `xor dx, dx` sets argv to NULL. ax is already 0 (for argc).
       # OpenWatcom wcc does not support non-constant initializers, so we can call
@@ -482,7 +495,7 @@ times -(((bss_end-bss_start)+(data_end-data_start)+(code_end-code_start+0x100)+3
     $segment_vofs{_TEXT} = $vofs += length($call_main);
     $vofs += length($ledata{_TEXT});
     my $after_text_vofs = $vofs;
-    $vofs &= 15 if $EXT eq "exe";
+    $vofs &= 15 if $is_exe;
     my $dgroup_vofs = $segment_vofs{CONST} = $vofs;
     $segment_vofs{CONST2} = $vofs += length($ledata{CONST});
     $segment_vofs{_DATA} = $vofs += length($ledata{CONST2});
@@ -500,10 +513,10 @@ times -(((bss_end-bss_start)+(data_end-data_start)+(code_end-code_start+0x100)+3
     my $data_size = $segment_sizes{CONST} + $segment_sizes{CONST2} + $segment_sizes{_DATA};
     die "$0: fatal: data too large\n" if $data_size + $segment_sizes{_BSS} > 65535;  # !! Allow 65536, also in nasm.
     die "$0: fatal: code too large\n" if $after_text_vofs > 65535;  # !! Allow 65536, also in nasm.
-    die "$0: fatal: code+data too large for .com\n" if $EXT ne "exe" and $vofs > 65535;
-    my $stack_size = 65535 - ($data_size + $segment_sizes{_BSS} + ($EXT eq "exe" ? 0 : 3 + $after_text_vofs));
+    die "$0: fatal: code+data too large for .com\n" if !$is_exe and $vofs > 65535;
+    my $stack_size = 65535 - ($data_size + $segment_sizes{_BSS} + ($is_exe ? 0 : 3 + $after_text_vofs));
     die "$0: fatal: stack too small (code and data too large)\n" if $stack_size < 10;
-    if ($EXT eq "exe") {
+    if ($is_exe) {
       my $image_size = length($exe_header) + length($clear_bss) + length($call_main) + $segment_sizes{_TEXT} + $data_size;
       substr($exe_header, 0, 24) = pack("a2v11", "MZ", $image_size & 511, ($image_size + 511) >> 9, 0, 1,
           ($segment_sizes{_BSS} + $stack_size + 15-(-($data_size + $after_text_vofs) & 15)) >> 4,
@@ -511,7 +524,8 @@ times -(((bss_end-bss_start)+(data_end-data_start)+(code_end-code_start+0x100)+3
     }
     substr($clear_bss, 5, 2) = pack("v", $segment_vofs{_BSS});
     substr($clear_bss, 8, 2) = pack("v", ($vofs - $segment_vofs{_BSS} + 1) >> 1);
-    substr($call_main, $call_main_ofs, 2) = pack("v", $symbol_vofs{$call_main_symbol} - ($call_main_ofs + 2 + $segment_vofs{call_main}));
+    substr($call_main, $call_main_ofs, 2) = pack("v", $symbol_vofs{$call_main_symbol} - ($call_main_ofs + 2 + $segment_vofs{call_main})) if
+        defined($call_main_ofs);
     print $exe_header;
     print $clear_bss;
     print $call_main;

@@ -11,7 +11,7 @@ Usage:
 
   $ ./dosmc examples/prog.c  # Creates prog.exe.
 
-  $ ./dosmc -bt=com examples/prog.c  # Creates prog.com.
+  $ ./dosmc -mt examples/prog.c  # Creates prog.com.
 
 To try it, run `dosbox examples' (without the quotes), and within the DOSBox
 window, run prog.exe or prog.com . The expected output is `ZYfghiHello!'
@@ -75,7 +75,11 @@ is not included in dosmc).
 Program entry points for dosmc (choose any):
 
 * void _start(void) { ... }. Calling exit(0) in the end is optional.
-  Command-line arguments are not parsed or passed.
+  Command-line arguments are not parsed or passed. To get the least amount
+  of file size overhead, use _start, use -mt if possible (to generate a .com
+  file), make _start the very first function in the .c file (possibly
+  predeclaring other functions), and have no global variables without
+  initial value (in segment _BSS).
 * int main(void) { ... }. Return exit code (0 means success).
   Command-line arguments are not parsed or passed.
 * int main(int argc, char **argv) { ... }. Return exit code (0 means success).
@@ -84,6 +88,9 @@ Program entry points for dosmc (choose any):
   bytes (excluding argv[0], the program name). When parsing this, the
   dosmc C library splits on spaces and tab, except if the entire argument
   is double-quoted ("); it passes backslashes as is.
+
+Global variables without initial value (e.g. `int myvar;') (in segment _BSS)
+are auto-initialized to 0, stack isn't initialized.
 
 Notes about maximum memory usage of DOS programs:
 
