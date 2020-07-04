@@ -72,6 +72,19 @@ for that in the OpenWatcom C language. Using entire .asm files as sources
 doesn't work either with dosmc, because wcc cannot compile them (and wasm
 is not included in dosmc).
 
+Program entry points for dosmc (choose any):
+
+* void _start(void) { ... }. Calling exit(0) in the end is optional.
+  Command-line arguments are not parsed or passed.
+* int main(void) { ... }. Return exit code (0 means success).
+  Command-line arguments are not parsed or passed.
+* int main(int argc, char **argv) { ... }. Return exit code (0 means success).
+  Command-line arguments are currently stubbed (argc=0, argv=0), will be
+  parsed and passed in the future. DOS supports a command-line up to 127
+  bytes (excluding argv[0], the program name). When parsing this, the
+  dosmc C library splits on spaces and tab, except if the entire argument
+  is double-quoted ("); it passes backslashes as is.
+
 Notes about maximum memory usage of DOS programs:
 
 * 16-bit DOS programs can address up to 1 MiB memory (in real mode, using

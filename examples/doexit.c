@@ -1,6 +1,6 @@
 #include <dosmc.h>
 
-void _main0(void) {
+void _start(void) {
   exit(0);
 }
 

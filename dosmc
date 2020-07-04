@@ -3,15 +3,15 @@
 #
 # TODOs:
 #
-# !! Change _main0 to void _start(void);
 # !! Optimize away call in entry point of main and _start.
 # !! Optimize away extra exit after _start.
 # !! Optimize away `pop ...' registers at end of _start.
 # !! Optimize `mov al, ...; mov ah, ...' at end of main and _start.
 # !! Change .bss do .data (\0) for short .bss.
-# !! Omit the zero-initialize if .bss is empty or it contains argv only.
+# !! Omit the zero-initialize if .bss is empty or it contains argv only. But keep ax=0 as argc for main if needed.
 # !! Add option for word alignment of data segments, for speed.
-# !! TODO(pts): Add automatic argv splitting for main unless -D_NOARG_MAIN.
+# !! TODO(pts): Add automatic argv splitting for main, but keep using argc=0 and argv=0 if -D_STUBARG_MAIN, and keep these unspecified if -D_NOARG_MAIN.
+# !! Is cld needed? At least optimize it away if there are no string instructions.
 #
 # !! Allow .obj files from NASM, give source example for section.
 # !! Allow .nasm source files, give source example for section.
@@ -284,6 +284,8 @@ LINKER_CODE='
   for my $symbol (keys %symbol_ofs) {
     delete $undefined_symbols{$symbol};
   }
+  # Helpfully added by wcc if there is main(...) with nonzero arguments.
+  my $do_use_argc = exists($undefined_symbols{__argc});
   delete $undefined_symbols{__argc};
   delete $undefined_symbols{_cstart_};
   die "$0: fatal: missing symbol: _small_code_\n" if !exists($undefined_symbols{_small_code_});
@@ -291,7 +293,7 @@ LINKER_CODE='
   my @undefined_symbols = sort keys %undefined_symbols;
   die "$0: fatal: undefined symbols: @undefined_symbols\n" if @undefined_symbols;
 
-  my $entry_count = (defined($symbol_ofs{main_}) + defined($symbol_ofs{_main0_}));
+  my $entry_count = (defined($symbol_ofs{main_}) + defined($symbol_ofs{_start_}));
   die "$0: fatal: too many entry points (main functions)\n" if $entry_count > 1;
   die "$0: fatal: missing entry point (main function)\n" if $entry_count == 0;
 
@@ -421,15 +423,18 @@ times -(((bss_end-bss_start)+(data_end-data_start)+(code_end-code_start+0x100)+3
     }
     print qq(bits 16\ncpu $NASMCPU\n);
     print qq($fullprog_code\n);
-    print qq(cld\npush es\npush ds\npop es\nmov di, bss_start\nmov cx, (stack-bss_start+1)>>1\nxor ax, ax\nrep stosw\npop es\n);
+    print qq(cld\npush es\npush ds\npop es\nmov di, bss_start\nmov cx, (stack-bss_start+1)>>1\nxor ax, ax\nrep stosw\npop es\n);  # clear_bss.
 
-    if (defined($symbol_ofs{main_})) {  # TODO(pts): Keep these consistent with emit_executable.
-      # `xor dx, dx` sets argv to NULL. ax is already 0 (for argc).
+    if (defined($symbol_ofs{_start_})) {  # TODO(pts): Keep these consistent with emit_executable.
+      print qq(db 0xE8\ndw 0x0000+_start_-\(\$+2\)  ; call _start_\n);
+      print qq(db 0xB8, 0, 0x4C, 0xCD, 0x21  ; mov ax, 0x4c00;; int 0x21  ; EXIT with code 0.\n);
+    } elsif (defined($symbol_ofs{main_}) and $do_use_argc) {
+      # `xor dx, dx` sets argv to NULL. ax is already 0 (for argc) because of clear_bss.
       # OpenWatcom wcc does not support non-constant initializers, so we can call
       # main now.
-      print "xor dx, dx\ncall main_\nmov ah, 0x4c  ; EXIT, exit code in al\nint 0x21\n";
-    } elsif (defined($symbol_ofs{_main0_})) {
-      print qq(db 0xE8\ndw 0x0000+_main0_-\(\$+2\)  ; call _main0_\nmov ah, 0x4c  ; EXIT, exit code in al\nint 0x21\n);
+      print qq(xor dx, dx\ncall main_\nmov ah, 0x4c  ; EXIT, exit code in al\nint 0x21\n);
+    } elsif (defined($symbol_ofs{main_})) {
+      print qq(call main_\nmov ah, 0x4c  ; EXIT, exit code in al\nint 0x21\n);
     }
     emit_nasm_segment("_TEXT");
     print qq($fullprog_data\n);
@@ -451,24 +456,28 @@ times -(((bss_end-bss_start)+(data_end-data_start)+(code_end-code_start+0x100)+3
     } else {
       $vofs = 0x100;
     }
-    # qq(cld\npush es\npush ds\npop es\nmov di, bss_start\nmov cx, (stack-bss_start+1)>>1\nxor ax, ax\nrep stosw\npop es\n);
+    # cld;; push es;; push ds;; pop es;; mov di, bss_start;; mov cx, (stack-bss_start+1)>>1;; xor ax, ax;; rep stosw;; pop es
     my $clear_bss = pack("a5va1va5", "\xFC\x06\x1E\x07\xBF", 0, "\xB9", 0, "\x31\xC0\xF3\xAB\x07");  # Affected by fixups below.
     my %segment_vofs;
     $segment_vofs{clear_bss} = $vofs;
     $segment_vofs{call_main} = $vofs += length($clear_bss);
     # $call_main is affected by fixups below.
     my($call_main, $call_main_symbol, $call_main_ofs);
-    if (defined($symbol_ofs{main_})) {
+    if (defined($symbol_ofs{_start_})) {
+      # call _start_;; mov ax, 0x4c00;; int 0x21  ; EXIT with code 0.
+      $call_main = pack("ava5", "\xE8", 0, "\xB8\x00\x4C\xCD\x21");
+      $call_main_symbol = "_start_"; $call_main_ofs = length($call_main) - 7;
+    } elsif (defined($symbol_ofs{main_}) and $do_use_argc) {
       # `xor dx, dx` sets argv to NULL. ax is already 0 (for argc).
       # OpenWatcom wcc does not support non-constant initializers, so we can call
       # main now.
-      # "xor dx, dx\ncall main_\nmov ah, 0x4c  ; EXIT, exit code in al\nint 0x21\n";
+      # xor dx, dx;; call main_;; mov ah, 0x4c;; int 0x21  ; EXIT, exit code in al
       $call_main = pack("a3va4", "\x31\xD2\xE8", 0, "\xB4\x4C\xCD\x21");
-      $call_main_symbol = "main_"; $call_main_ofs = 3;
-    } elsif (defined($symbol_ofs{_main0_})) {
-      # qq(db 0xE8\ndw 0x0000+_main0_-\(\$+2\)  ; call _main0_\nmov ah, 0x4c  ; EXIT, exit code in al\nint 0x21\n);
-      $call_main = pack("ava4", "\xE8", 0, "\xB4\x4C\xCD\x21");
-      $call_main_symbol = "_main0_"; $call_main_ofs = 1;
+      $call_main_symbol = "main_"; $call_main_ofs = length($call_main) - 6;
+    } elsif (defined($symbol_ofs{main_})) {
+      # call main_;; mov ah, 0x4c;; int 0x21  ; EXIT, exit code in al
+      $call_main = pack("a1va4", "\xE8", 0, "\xB4\x4C\xCD\x21");
+      $call_main_symbol = "main_"; $call_main_ofs = length($call_main) - 6;
     }
     $segment_vofs{_TEXT} = $vofs += length($call_main);
     $vofs += length($ledata{_TEXT});

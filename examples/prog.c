@@ -38,7 +38,7 @@ const int basey = 5;
 char hi[137], ho;
 int answer;
 
-int _main0(void) {
+int main(void) {
   char msg[3];
   msg[0] = 'Z'; msg[1] = 'Y'; msg[2] = '$';
   _printmsgx(msg);
