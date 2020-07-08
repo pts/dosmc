@@ -12,6 +12,7 @@
 # !! Add disassembler to cld optimization (maybe_contains_8086_str).
 # !! Add disassembler to check that ds is not used in the .exe file, and optimize away `pop ds'. (Without a disassembler, even if _CONST, _CONST2 and _DATA are empty, pointers to local (on-stack) variables may be taken and they won't work.)
 # !! Optimize away everything if the first instruction by the entry point is `ret' or exit.
+# !! Optimize away unused basic blocks from .text.
 #
 # !! Allow .obj files from NASM, give source example for section.
 # !! Allow .nasm source files, give source example for section.

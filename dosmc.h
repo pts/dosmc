@@ -7,12 +7,27 @@
 #define NULL ((void *)0)  /* stdlib.h */
 #endif
 
-static inline int _printmsgx(const char *msg);
+/* Writes a $-delimited string to stdout. */
+static inline void _printmsgx(const char *msg);
 #pragma aux _printmsgx = \
 "mov ah, 9" /* WRITE_STDOUT */ \
 "int 0x21" \
 parm [ dx ] \
 modify [ ah ];
+
+/* Writes a $-delimited string (with far pointer) to stdout. */
+static inline void _printmsgx_far(const char far *msg);
+#pragma aux _printmsgx_far = \
+"mov ah, 9" /* WRITE_STDOUT */ \
+"push ds" \
+"push es" \
+"pop ds" \
+"int 0x21" \
+"pop ds" \
+parm [ es dx ] \
+modify [ ah ];
+
+#define _printmsgx_autosize(msg) ((sizeof((msg)+0) == sizeof(const char*)) ? _printmsgx((const char*)(int)msg) : _printmsgx_far(msg))
 
 /* Writes single byte to stdout. Binary safe when redirected. */
 /* TODO(pts): Make it not inline. */
