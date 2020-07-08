@@ -23,14 +23,13 @@ eval '(exit $?0)' && eval 'PERL_BADLANG=x;PATH="$PATH:.";export PERL_BADLANG\
 # !! Remove `push dx' and `pop dx' (and other register operations) from examples/hello.com.
 # !! Recognize the entry point (implicit ..start) in MODEND in place of _start (and conflict).
 # !! Add a -D... override for $need_clear_df=0.
-# !! Add size optimizations for nasm input.
+# !! Add size optimizations for nasm input, especially for .exe output, should be just (push ss;; pop ds).
+# !! Make an `org 0x100 ... section .data' .nasm file work with both .com and with dosmc .com and .exe .
+# !! Make simple_nasm_exe.nasm work with the built-in linker (ds, ss, sp setup is unnecessary, remove that).
 #
 # !! Cleanup flag to remove .tmp files.
-# !! Allow .obj files from NASM, give source example for section.
-# !! Allow .nasm source files, give source example for section.
 # !! Allow .obj files from A86, give source example for section.
 # !! Allow .obj files from WASM, give source example for section.
-# !! Make simple_nasm_exe.nasm work (ds, ss, sp setup is unnecessary, remove that).
 #
 
 BEGIN { $^W = 1 }
@@ -373,7 +372,8 @@ sub emit_nasm_segment($$$$$$) {
   $chunk_sub->($size) if $size > $i;
 }
 
-# Load OMF .obj file.
+# Load OMF .obj file. This function may misbehave for .obj files not created
+# by (wcc or nasm) invoked by dosmc.
 # Based on: https://pierrelib.pagesperso-orange.fr/exec_formats/OMF_v1.1.pdf
 sub load_obj($$) {
   my($objfn, $obj_symbol_prefix) = @_;
@@ -395,7 +395,6 @@ sub load_obj($$) {
     die "$0: fatal: EOF in obj record header\n" if (read($f, $data, 3) or 0) != 3;
     my($type, $size) = unpack("Cv", $data);
     die "$0: fatal: empty obj record\n" if !$size;
-    last if $type == 0x8a;  # MODEND.
     #printf STDERR "info: RECORD 0x%x %d\n", $type, $size;
     die "$0: fatal: EOF in obj record header\n" if (read($f, $data, $size) or 0) != $size;
     --$size; substr($data, -1) = "";  # Ignore checksum.
@@ -431,7 +430,7 @@ sub load_obj($$) {
     } elsif ($type == 0xa0) {  # LEDATA.
       die "$0: fatal: LEDATA too short" if $size < 3;
       my($segment_idx, $ofs) = unpack("Cv", substr($data, 0, 3));
-      die "$0: fatal: unknown segment: $segment_idx\n" if $segment_idx >= @segment_names;
+      die "$0: fatal: unknown segment: $segment_idx\n" if !$segment_idx or $segment_idx >= @segment_names;
       my $segment_name = $segment_names[$segment_idx];
       $size -= 3; substr($data, 0, 3) = "";
       #print STDERR "info: LEDATA: $segment_name ofs=$ofs size=$size\n";
@@ -448,7 +447,7 @@ sub load_obj($$) {
       my $symbol_prefix = $type == 0xb6 ? $obj_symbol_prefix : "G\$";
       die "$0: fatal: $recname too short" if $size < 2;
       my $segment_idx = vec($data, 1, 8);
-      die "$0: fatal: unknown segment: $segment_idx\n" if $segment_idx >= @segment_names;
+      die "$0: fatal: unknown segment: $segment_idx\n" if !$segment_idx or $segment_idx >= @segment_names;
       my $segment_name = $segment_names[$segment_idx];
       for (my $i = 2; $i < $size; $i += 3) {
         my $fsize = vec($data, $i++, 8);
@@ -528,7 +527,7 @@ sub load_obj($$) {
           die "$0: fatal: EOF in FIXUPP target\n" if $i + ($frame == 1 ? 2 : 1) > $size;
           ++$i if $frame == 1;
           my $segment_idx = vec($data, $i++, 8);
-          die "$0: fatal: unknown segment: $segment_idx\n" if $segment_idx >= @segment_names;
+          die "$0: fatal: unknown segment: $segment_idx\n" if !$segment_idx or $segment_idx >= @segment_names;
           my $segment_name = $segment_names[$segment_idx];
           #print STDERR "info: FIXUPP 16-bit $is_self \@$ofs SEGMENT $segment_name\n";
           $symbol = "OS\$${segment_name}";
@@ -539,6 +538,33 @@ sub load_obj($$) {
       }
     } elsif ($type == 0x9d) {  # Long FIXUPP.
       die "$0: fatal: long FIXUPP not supported\n";
+    } elsif ($type == 0x8a) {  # MODEND.
+      if ($size) {
+        my $b = vec($data, 0, 8);
+        if (($b & 0xc1) == 0xc1) {
+          die "$0: fatal: EOF in MODEND entry point\n" if $size < 2;
+          $b = vec($data, 1, 8);
+          # $frame = 0; $target = 0;
+          die "$0: fatal: unsupported MODEND fix data: " . sprintf("0x%x", $b). "\n" if $b;
+          die "$0: fatal: EOF in MODEND datum\n" if $size < 4;
+          my $segment_idx = vec($data, 2, 8); my $segment_idx2 = vec($data, 3, 8);
+          die "$0: fatal: segment index mismatch in MODEND\n" if $segment_idx != $segment_idx2;
+          die "$0: fatal: unknown segment: $segment_idx\n" if !$segment_idx or $segment_idx >= @segment_names;
+          my $segment_name = $segment_names[$segment_idx];
+          die "$0: fatal: expecting _TEXT in MODEND entry point\n" if $segment_name ne "_TEXT";
+          die "$0: fatal: EOF in MODEND target displacement\n" if $size < 6;
+          my $ofs = unpack("v", substr($data, 4, 2));
+          my $symbol = "G\$_start_";
+          die "$0: fatal: duplicate entry point symbol within obj: $symbol\n" if exists($symbol_ofs{$symbol});
+          $symbol_ofs{$symbol} = $ofs;
+          push @{$segment_symbols{$segment_name}}, [$ofs, $symbol];
+        } elsif ($b & 0x40) {
+          die "$0: fatal: unsupported MODEND mattr: " . sprintf("0x%x", $b). "\n";
+        }
+      }
+      last;
+    } elsif ($type == 0x8b) {  # Long MODEND.
+      die "$0: fatal: long MODEND not supported\n";
     } elsif ($type == 0x80) {  # THEADR.
     } elsif ($type == 0x88) {  # COMENT.
     } elsif ($type == 0x9a) {  # GRPDEF.

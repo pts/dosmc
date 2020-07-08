@@ -1,6 +1,8 @@
-global _start_
-_start_:
+; Can be used instead of `..start:':
+;global _start_
+;_start_:
 
+..start:
 mov ah, 9
 mov dx, msg
 int 0x21
