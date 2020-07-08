@@ -17,12 +17,13 @@ eval '(exit $?0)' && eval 'PERL_BADLANG=x;PATH="$PATH:.";export PERL_BADLANG\
 # !! Optimize `mov al, ...; mov ah, ...' at end of main and _start.
 # !! Add option for word alignment of data segments, for speed.
 # !! TODO(pts): Add automatic argv splitting for main, but keep using argc=0 and argv=NULL if -D_STUBARG_MAIN, and keep these unspecified if -D_NOARG_MAIN.
-# !! Add disassembler to cld optimization (maybe_contains_8086_str).
 # !! Add disassembler to check that ds is not used in the .exe file, and optimize away `pop ds'. (Without a disassembler, even if _CONST, _CONST2 and _DATA are empty, pointers to local (on-stack) variables may be taken and they won't work.)
 # !! Optimize away everything if the first instruction by the entry point is `ret' or exit.
 # !! Optimize away unused basic blocks from .text.
 # !! Remove `push dx' and `pop dx' (and other register operations) from examples/hello.com.
-# !! Recognize the entry point (implicit ..start) in MODEND.
+# !! Recognize the entry point (implicit ..start) in MODEND in place of _start (and conflict).
+# !! Add a -D... override for $need_clear_df=0.
+# !! Add size optimizations for nasm input.
 #
 # !! Cleanup flag to remove .tmp files.
 # !! Allow .obj files from NASM, give source example for section.
@@ -89,43 +90,44 @@ for my $arg (@ARGV) {
     die "$0: fatal: unsupported default calling convention: $arg\n";
   } elsif ($arg =~ m@\A-@) {
     push @wcc_args, $arg;
-  } elsif ($arg =~ m@[.]c\Z(?!\n)@) {
+  } elsif ($arg =~ m@[.](?:c|obj)\Z(?!\n)@) {
     push @sources, $arg;
   } else {
-    die "$0: fatal: bad file extension for source file (must be .c): $arg\n";
+    die "$0: fatal: bad file extension for source file (must be .c or .obj): $arg\n";
   }
 }
 $EXT = $EXEOUT =~ m@[.](?:com|COM)\Z(?!\n)@ ? "com" : "exe" if !length($EXT);
 die "$0: fatal: missing source file argument\n" if !@sources;
-for my $src (@sources) {
-  die "$0: fatal: source file not found: $src\n" if !-f($src);
+for my $srcfn (@sources) {
+  die "$0: fatal: source file not found: $srcfn\n" if !-f($srcfn);
 }
-die "$0: fatal: multiple source file arguments\n" if @sources > 1;  # TODO(pts): Relax this.
+my $is_multiple_sources_ok = 0;
 
 die "$0: fatal: missing executable $MYDIR/ow2bin/wcc; run $MYDIR/download_openwatcom.sh first\n" if !-x("$MYDIR/ow2bin/wcc");
+my $in1base = $sources[0]; $in1base =~ s@[.][^./]+\Z(?!\n)@@s;  # TODO(pts): Port to Win32.
+my $PLL = "";
+if ($PL eq "-cn" or $PL eq "-ce") {
+  # !! TODO(pts): Add -ca to produce .nasm output.
+  $EXEOUT = "$in1base.$EXT" if !length($EXEOUT);
+  #push @wcc_cmd, "-fo=$in1base.tmp.obj";
+  $is_multiple_sources_ok = 1;
+} elsif ($PL eq "-cw") {
+  $EXEOUT = "$in1base.wasm" if !length($EXEOUT);
+} else {
+  if ($PL eq "-c") {
+    $is_multiple_sources_ok = 1 if !length($EXEOUT);
+  } else {
+    $PLL = $PL;
+    $is_multiple_sources_ok = 1 if $PL eq "-zs";
+    push @wcc_cmd, "-fo=$EXEOUT" if length($EXEOUT);
+  }
+}
+die "$0: fatal: multiple source file arguments with $PL\n" if !$is_multiple_sources_ok and @sources > 1;
+
 delete $ENV{WATCOM};
 delete $ENV{INCLUDE};
 $ENV{PATH} = "/bin:/usr/bin" if !defined($ENV{PATH}) or !length($ENV{PATH});  # TODO(pts): Port to Win32.
 $ENV{PATH} = "$MYDIR/ow2bin:$ENV{PATH}";  # TODO(pts): Port to Win32.
-
-my $SRC = $sources[0];
-my $SRCBASE = $SRC; $SRCBASE =~ s@[.][^./]+\Z(?!\n)@@s;  # TODO(pts): Port to Win32.
-my $PLL = "";
-if ($PL eq "-cn" or $PL eq "-ce") {
-  # !! TODO(pts): Add -ca to produce .nasm output.
-  $EXEOUT = "$SRCBASE.$EXT" if !length($EXEOUT);
-  push @wcc_cmd, "-fo=$SRCBASE.tmp.obj";
-} elsif ($PL eq "-cw") {
-  $EXEOUT = "$SRCBASE.wasm" if !length($EXEOUT);
-  push @wcc_cmd, "-fo=$SRCBASE.tmp.obj";
-} else {
-  if ($PL eq "-c") {
-    $EXEOUT = "$SRCBASE.obj" if !length($EXEOUT);
-  } else {
-    $PLL = $PL;
-  }
-  push @wcc_cmd, "-fo=$EXEOUT" if length($EXEOUT);
-}
 
 # Quote string from Bourne-like shells.
 # !! Port this to Win32.
@@ -185,13 +187,26 @@ sub run_command(@) {
 # -pl: -E
 # No need to set $WATCOM or to extend $PATH.
 # 202: symbol defined but not referenced (useful for static functions).
-push @wcc_cmd, "-D__DOSMC__";
+push @wcc_cmd, "-D__DOSMC__";  # TODO(pts): Add these and also $CPUF for .nasm.
 push @wcc_cmd, "-D__DOSMC_COM__" if $EXT eq "com";
 push @wcc_cmd, $Q if length($Q);
 push @wcc_cmd, $PLL if length($PLL);
-push @wcc_cmd, "-bt=dos", "-ms", "-i=$MYDIR", "-s", "-os", "-W", "-w4", "-wx", "-we", "-wcd=202", $CPUF, "-fr", @wcc_args, $SRC;
-if (run_command(@wcc_cmd)) {
-  print STDERR "$0: fatal: wcc failed\n"; exit(2);
+push @wcc_cmd, "-bt=dos", "-ms", "-i=$MYDIR", "-s", "-os", "-W", "-w4", "-wx", "-we", "-wcd=202", $CPUF, "-fr", @wcc_args;
+my $wcc_cmd_size = @wcc_cmd;
+my @objfns;
+my $do_objfn_arg = ($PL eq "-cw" or $PL eq "-ce" or $PL eq "-cn" or $PL eq "-c");
+my $forced_objfn = ($PL ne "-cw" and $PL ne "-ce" and $PL ne "-cn" and length($EXEOUT)) ? $EXEOUT : undef;
+for my $srcfn (@sources) {
+  if ($srcfn =~ m@[.]obj\Z(?!\n)@) { push @objfns, $srcfn; next }
+  my $srcbase = $srcfn; $srcbase =~ s@[.][^./]+\Z(?!\n)@@s;  # TODO(pts): Port to Win32.
+  my $objfn = defined($forced_objfn) ? $forced_objfn : $PL eq "-c" ? "$srcbase.obj" : "$srcbase.tmp.obj";
+  push @objfns, $objfn;
+  push @wcc_cmd, "-fo=$objfn" if $do_objfn_arg;
+  push @wcc_cmd, $srcfn;
+  if (run_command(@wcc_cmd)) {
+    print STDERR "$0: fatal: wcc failed\n"; exit(2);
+  }
+  splice @wcc_cmd, $wcc_cmd_size;
 }
 
 # --- Linker: Reads .obj files, writes .exe and .com files (for equivalent .nasm files).
@@ -199,17 +214,17 @@ if (run_command(@wcc_cmd)) {
 # Checks if the entry point contains an instructions to exit immediately,
 # return exit code (0..255) if found, otherwise returns undef.
 sub get_8086_exit_code($$) {
-  my($ledatar, $symbol_ofsr) = @_;
-  pos($ledatar->{_TEXT}) = defined($symbol_ofsr->{_start_}) ? $symbol_ofsr->{_start_} : $symbol_ofsr->{main_};
-  return 0 if $ledatar->{_TEXT} =~ /\G(?:\x31\xC0)?\xC3/gcs;  # xor ax, ax;; ret
-  $ledatar->{_TEXT} =~ /\G[\x06\x0E\x16\x1E\x50-\x57]+/gcs;  # Skip some register pushes.
+  my($data, $text_symbol_ofsr) = @_;
+  pos($data) = defined($text_symbol_ofsr->{_start_}) ? $text_symbol_ofsr->{_start_} : $text_symbol_ofsr->{main_};
+  return 0 if $data =~ /\G(?:\x31\xC0)?\xC3/gcs;  # xor ax, ax;; ret
+  $data =~ /\G[\x06\x0E\x16\x1E\x50-\x57\xFC\xFD]+/gcs;  # Skip some register pushes, cld, std.
   # TODO(pts): Add skipping of (sub sp, ...) for local variables.
   return unpack("C", $1) if
-      $ledatar->{_TEXT} =~ /\G\xB8(.)\x4C\xCD\x21/gcs or  # mov ax, 0x4c??;; int 0x21
-      $ledatar->{_TEXT} =~ /\G\xB4\x4C\xB0(.)\xCD\x21/gcs or  # mov ah, 0x4c;; mov al, 0x??;; int 0x21
-      $ledatar->{_TEXT} =~ /\G\xB0(.)\xB4\x4C\xCD\x21/gcs or  # mov al, 0x??;; mov ah, 0x4c;; int 0x21
-      $ledatar->{_TEXT} =~ /\G\xB8(.).\xC3/gcs or  # mov ax, 0x--??;; ret
-      $ledatar->{_TEXT} =~ /\G\xB0(.)\xC3/gcs;  # mov al, 0x??;; ret
+      $data =~ /\G\xB8(.)\x4C\xCD\x21/gcs or  # mov ax, 0x4c??;; int 0x21
+      $data =~ /\G\xB4\x4C\xB0(.)\xCD\x21/gcs or  # mov ah, 0x4c;; mov al, 0x??;; int 0x21
+      $data =~ /\G\xB0(.)\xB4\x4C\xCD\x21/gcs or  # mov al, 0x??;; mov ah, 0x4c;; int 0x21
+      $data =~ /\G\xB8(.).\xC3/gcs or  # mov ax, 0x--??;; ret
+      $data =~ /\G\xB0(.)\xC3/gcs;  # mov al, 0x??;; ret
   undef
 }
 
@@ -301,12 +316,13 @@ sub is_complicated_8086_code($$$) {
 }
 
 my @SEGMENT_ORDER = qw(_TEXT CONST CONST2 _DATA _BSS);  # Constant, OpenWatcom wcc.
+my %SEGMENT_NAME_OK = map { $_ => 1 } @SEGMENT_ORDER;
 my %ASM_DATA_OP = (1 => "db", 2 => "dw", 4 => "dd", 8 => "dq");  # Constant, nasm.
 
 sub emit_nasm_segment($$$$$$) {
   my($segment_name, $exef, $size, $data, $symbolsr, $fixupr) = @_;
-  print $exef "OBJ_SEGMENT_${segment_name}_start:\n";
-  print $exef "OBJ_SEGMENT_${segment_name}_size equ $size\n";
+  print $exef "S\$${segment_name}:\n";
+  print $exef "SSIZE\$${segment_name} equ $size\n";  # Not needed, just FYI.
 
   # Sort by ofs ascending.
   my @symbols = sort { $a->[0] <=> $b->[0] or $a->[1] cmp $b->[1] } @$symbolsr;
@@ -329,7 +345,7 @@ sub emit_nasm_segment($$$$$$) {
   while ($si < @symbols) {
     my $j = $symbols[$si][0];
     if ($j > $size or $j < $i) {
-      print $exef "$symbols[$si][1] equ $j+OBJ_SEGMENT_${segment_name}_start\n";
+      print $exef "$symbols[$si][1] equ $j+S\$_${segment_name}\n";
       ++$si; next
     }
     $chunk_sub->($j) if $j > $i;
@@ -340,33 +356,23 @@ sub emit_nasm_segment($$$$$$) {
   $chunk_sub->($size) if $size > $i;
 }
 
-sub link_executable($$@) {
-  my $is_nasm = $_[0]; my $exefn = $_[1];  # Also uses: $CPUF and $EXT.
-  local $0 = "dosmc-linker-$EXT" . ($is_nasm ? "-nasm" : "");
-  my $NASMCPU = $CPUF eq "-0" ? "8086" : substr($CPUF, 1) . "86";
-  splice @_, 0, 2;  # Remove the first 2 arguments, keep .obj files.
-  die "$0: assert: single .obj file expected" if @_ != 1;
-  my $objfn = $_[0];
-  die "$0: fatal: unknown EXT: $EXT\n" if $EXT ne "exe" and $EXT ne "com";
-  my $is_exe = $EXT eq "exe";  # Otherwise .com.
-  my $exef;  # May be of .com, .exe or .nasm format.
-  my $f;  # Of OMF .obj format, typically created by wcc or `nasm -f obj'.
-  eval {
-  die "$0: fatal: cannot open for writing: $exefn\n" if !open($exef, ">", $exefn);
-  die "$0: fatal: cannot open obj file for reading: $objfn\n" if !open($f, "<", $objfn);
-  # Based on: https://pierrelib.pagesperso-orange.fr/exec_formats/OMF_v1.1.pdf
+# Load OMF .obj file.
+# Based on: https://pierrelib.pagesperso-orange.fr/exec_formats/OMF_v1.1.pdf
+sub load_obj($$) {
+  my($objfn, $obj_symbol_prefix) = @_;
   my @lnames = ("-LN0");
-  my %segment_name_ok = map { $_ => 1 } @SEGMENT_ORDER;
   my %segment_sizes;
   my @segment_names = ("-SN");
   my %ledata = map { $_ => "" } @SEGMENT_ORDER;  # $segment_name => $ledata_str.
-  my %symbol_ofs;   # $symbol => $ofs.
+  my %symbol_ofs;   # $symbol => $ofs. Offset is within its section.
   my %segment_symbols = map { $_ => [] } @SEGMENT_ORDER;  # $segment_name => [[$ofs, $symbol], ...].
   my @extdef = ("-ED");
   my %fixupp = map { $_ => [] } @SEGMENT_ORDER;  # $segment_name => [[$endofs, $ofs, $ltypem, $symbol], ...].
   my $has_string_instructions = 0;
   my($last_segment_name, $last_ofs);
-  my $obj_symbol_prefix = "O1\$";
+  my $f;  # Of OMF .obj format, typically created by wcc or `nasm -f obj'.
+  eval {
+  die "$0: fatal: cannot open obj file for reading: $objfn\n" if !open($f, "<", $objfn);
   while (1) {
     my $data;
     die "$0: fatal: EOF in obj record header\n" if (read($f, $data, 3) or 0) != 3;
@@ -392,7 +398,7 @@ sub link_executable($$@) {
       die "$0: fatal: bad segment_name_idx\n" if $segment_name_idx >= @lnames;
       $segment_size = 0x10000 if $is_big;
       my $segment_name = $lnames[$segment_name_idx];
-      die "$0: fatal: unsupported segment: $segment_name\n" if !$segment_name_ok{$segment_name};
+      die "$0: fatal: unsupported segment: $segment_name\n" if !$SEGMENT_NAME_OK{$segment_name};
       die "$0: fatal: duplicate segment: $segment_name\n" if exists($segment_sizes{$segment_name});
       $segment_sizes{$segment_name} = $segment_size;
       # Some segment indexes would become 2 bytes, we do not support that.
@@ -432,7 +438,7 @@ sub link_executable($$@) {
         #print STDERR "info: $recname $segment_name $symbol $ofs $type\n";
         # Also because we do not support parsing 2-byte type index.
         die "$0: fatal: bad symbol type: symbol=$symbol type=$type\n" if $type != 0;
-        die "$0: fatal: duplicate symbol: $symbol\n" if exists($symbol_ofs{$symbol});
+        die "$0: fatal: duplicate symbol within obj: $symbol\n" if exists($symbol_ofs{$symbol});
         $symbol_ofs{$symbol} = $ofs;
         push @{$segment_symbols{$segment_name}}, [$ofs, $symbol];
       }
@@ -503,7 +509,7 @@ sub link_executable($$@) {
           die "$0: fatal: unknown segment: $segment_idx\n" if $segment_idx >= @segment_names;
           my $segment_name = $segment_names[$segment_idx];
           #print STDERR "info: FIXUPP 16-bit $is_self \@$ofs SEGMENT $segment_name\n";
-          $symbol = "OBJ_SEGMENT_${segment_name}_start";
+          $symbol = "OS\$${segment_name}";
         } else {
           die "$0: fatal: unsupported FIXUPP: frame=$frame target=$target\n";
         }
@@ -520,6 +526,9 @@ sub link_executable($$@) {
     }
     $last_segment_name = $last_ofs = undef if $type != 0xa0 and $type != 0xa1 and $type != 0x9c;
   }
+  };  # End of eval block.
+  close($f) if $f;
+  die $@ if $@;
   # This should be done for each input .obj files.
   my $code_type = is_complicated_8086_code($ledata{_TEXT}, $fixupp{_TEXT}, $segment_symbols{_TEXT});
   if ($code_type) {  # Complicated.
@@ -527,7 +536,6 @@ sub link_executable($$@) {
   } else {
     $has_string_instructions = 1 if length($code_type);
   }
-
   for my $segment_name (@SEGMENT_ORDER) {
     # Typically $segment_sizes{_BSS} is missing, put it back.
     $segment_sizes{$segment_name} = 0 if !exists($segment_sizes{$segment_name});
@@ -541,26 +549,106 @@ sub link_executable($$@) {
   for my $symbol (keys %symbol_ofs) {
     delete $undefined_symbols{$symbol};
   }
-  # Helpfully added by wcc if there is main(...) with nonzero arguments.
-  my $do_use_argc = exists($undefined_symbols{"G\$__argc"});
-  delete $undefined_symbols{"G\$__argc"};
-  delete $undefined_symbols{"G\$_cstart_"};
-  die "$0: fatal: missing symbol: G\$_small_code_\n" if !exists($undefined_symbols{"G\$_small_code_"});
-  delete $undefined_symbols{"G\$_small_code_"};
-  my @undefined_symbols = sort keys %undefined_symbols;
+  my @nlu = grep { substr($_, 0, 2) ne "G\$" } sort keys %undefined_symbols;
+  die "$0: fatal: found local undefined symbols in $objfn: @nlu\n" if @nlu;
+  \%undefined_symbols, \%segment_symbols, \%ledata, \%segment_sizes, \%fixupp, $has_string_instructions
+}
+
+sub link_executable($$@) {
+  my $is_nasm = $_[0]; my $exefn = $_[1];  # Also uses: $CPUF and $EXT.
+  local $0 = "dosmc-linker-$EXT" . ($is_nasm ? "-nasm" : "");
+  my $NASMCPU = $CPUF eq "-0" ? "8086" : substr($CPUF, 1) . "86";
+  splice @_, 0, 2;  # Remove the first 2 arguments, keep .obj files.
+  die "$0: fatal: unknown EXT: $EXT\n" if $EXT ne "exe" and $EXT ne "com";
+  my %undefined_symbols;
+  my %symbol_ofs;   # $symbol => $ofs. Offset is within its section.
+  my %text_symbol_ofs;   # $symbol => $ofs. Offset is within section _TEXT.
+  my %segment_symbols = map { $_ => [] } @SEGMENT_ORDER;  # $segment_name => [[$ofs, $symbol], ...].
+  my %ledata = map { $_ => "" } @SEGMENT_ORDER;  # $segment_name => $ledata_str.
+  my %fixupp = map { $_ => [] } @SEGMENT_ORDER;  # $segment_name => [[$endofs, $ofs, $ltypem, $symbol], ...].
+  my %segment_sizes = map { $_ => 0 } @SEGMENT_ORDER;  # $segment_name => $byte_size.
+  my $has_string_instructions = 0;
+  my @skipped_objfns;
+  my $do_use_argc = 0;
+  my $obji = 0;
+  my $has_small_code = 0;
+  while (@_) {  # Next round.
+    my $prev_obji = $obji;
+    for my $objfn (@_) {
+      ++$obji;
+      my $obj_symbol_prefix = "O$obji\$";
+      my($obj_undefined_symbols, $obj_segment_symbols, $obj_ledata, $obj_segment_sizes, $obj_fixupp, $obj_has_string_instructions) = load_obj($objfn, $obj_symbol_prefix);
+      if ($obji > 1) {
+        my $has_new_symbol = $obji == 0;
+        for my $segment_name (@SEGMENT_ORDER) {
+          for my $pair (@{$obj_segment_symbols->{$segment_name}}) {
+            my($ofs, $symbol) = @$pair;
+            if (exists($undefined_symbols{$symbol})) { $has_new_symbol = 1; last }
+          }
+          last if $has_new_symbol;
+        }
+        if (!$has_new_symbol) {  # Skip an .obj file if it doesn't define any new symbols.
+          --$obji;
+          push @skipped_objfns, $objfn;
+          next;
+        }
+      }
+      # Helpfully added by wcc if there is main(...) with nonzero arguments.
+      $do_use_argc = 1 if exists($obj_undefined_symbols->{"G\$__argc"});
+      delete $obj_undefined_symbols->{"G\$__argc"};
+      delete $obj_undefined_symbols->{"G\$_cstart_"};
+      $has_small_code = 1 if exists($obj_undefined_symbols->{"G\$_small_code_"});
+      delete $obj_undefined_symbols->{"G\$_small_code_"};
+      $has_string_instructions |= $obj_has_string_instructions;
+      my %old_segment_sizes = %segment_sizes;
+      for my $segment_name (@SEGMENT_ORDER) {
+        my $is_text = $segment_name eq "_TEXT";
+        my $segment_ofs = $old_segment_sizes{$segment_name};
+        my $segment_symbolsr = $segment_symbols{$segment_name};
+        my $fixupr = $fixupp{$segment_name};
+        for my $pair (@{$obj_segment_symbols->{$segment_name}}) {
+          my($ofs, $symbol) = @$pair;
+          die "$0: fatal: duplicate symbol across objs: $symbol\n" if exists($symbol_ofs{$symbol});
+          $ofs += $segment_ofs;
+          $symbol_ofs{$symbol} = $ofs;
+          $text_symbol_ofs{$symbol} = $ofs if $is_text;
+          push @$segment_symbolsr, [$ofs, $symbol];
+          delete $undefined_symbols{$symbol};
+        }
+        my $datar = \$obj_ledata->{$segment_name};
+        for my $fixup (@{$obj_fixupp->{$segment_name}}) {  # Apply fixups.
+          my($endofs, $ofs, $ltypem, $symbol) = @$fixup;
+          substr($$datar, $ofs, 2) = pack("v", unpack("v", substr($$datar, $ofs, 2)) + $old_segment_sizes{$1}) if $symbol =~ s@\AOS\$(?=(.*))@S\$@s;
+          push @$fixupr, [$endofs + $segment_ofs, $ofs + $segment_ofs, $ltypem, $symbol];
+        }
+        $ledata{$segment_name} .= $$datar;
+        $segment_sizes{$segment_name} += $obj_segment_sizes->{$segment_name};
+      }
+      for my $symbol (keys %$obj_undefined_symbols) {
+        $undefined_symbols{$symbol} = 1 if !exists($symbol_ofs{$symbol});
+      }
+    }
+    last if $obji == $prev_obji or !%undefined_symbols;
+    @_ = @skipped_objfns; @skipped_objfns = ();
+  }
+  my @undefined_symbols = map { substr($_, 2) } sort keys %undefined_symbols;  # Strip "G\$" prefix.
   die "$0: fatal: undefined symbols: @undefined_symbols\n" if @undefined_symbols;
 
-  my $entry_count = (defined($symbol_ofs{"G\$main_"}) + defined($symbol_ofs{"G\$_start_"}));
+  die "$0: fatal: missing symbol: G\$_small_code_\n" if !$has_small_code;  # TODO(pts): If all source files are .nasm, ignore it. How do we discover?
+
+  my $entry_count = (defined($text_symbol_ofs{"G\$main_"}) + defined($text_symbol_ofs{"G\$_start_"}));
   die "$0: fatal: too many entry points (main functions)\n" if $entry_count > 1;
   die "$0: fatal: missing entry point (main function)\n" if $entry_count == 0;
 
-  my $exit_code = get_8086_exit_code(\%ledata, \%symbol_ofs);
+  my $is_exe = $EXT eq "exe";  # Otherwise .com.
+  my $exit_code = get_8086_exit_code($ledata{_TEXT}, \%text_symbol_ofs);
   if (defined($exit_code)) {  # Shortcut if the program immediately exits.
     for my $segment_name (@SEGMENT_ORDER) {
       $ledata{$segment_name} = ""; $segment_sizes{$segment_name} = 0; $fixupp{$segment_name} = []; $segment_symbols{$segment_name} = [];
     }
+    delete $text_symbol_ofs{"G\$main_"};
     delete $symbol_ofs{"G\$main_"};
-    $symbol_ofs{"G\$_start_"} = 0;
+    $text_symbol_ofs{"G\$_start_"} = $symbol_ofs{"G\$_start_"} = 0;
     push @{$segment_symbols{_TEXT}}, [0, "_start_"];
     if ($is_exe or $exit_code) {
       $ledata{_TEXT} = pack("aCa3", "\xB8", $exit_code, "\x4C\xCD\x21");  # mov ax, 0x4c??;; int 0x21
@@ -572,16 +660,20 @@ sub link_executable($$@) {
 
   my $does_entry_point_return = !defined($exit_code);  # TODO(pts): Smarter detection.
   my $is_data_used = !defined($exit_code);
-  my $need_clear_ax = (defined($symbol_ofs{"G\$main_"}) and $do_use_argc);
+  my $need_clear_ax = (defined($text_symbol_ofs{"G\$main_"}) and $do_use_argc);
   my $do_clear_bss = $segment_sizes{_BSS} + ($need_clear_ax << 1) > 14;  # 14 == length($clear_bss_full).
   # _DATA comes before _BSS in @SEGMENT_ORDER, move all (\0) bytes from _BSS to _DATA.
   if (!$do_clear_bss) { $ledata{_DATA} .= "\0" x $segment_sizes{_BSS}; $segment_sizes{_DATA} += $segment_sizes{_BSS}; $segment_sizes{_BSS} = 0; }
-  my $need_clear_df = ($do_clear_bss or $has_string_instructions);
+  my $need_clear_df = ($do_clear_bss or ($has_string_instructions and !(defined($text_symbol_ofs{"G\$_start_"}) and
+      substr($ledata{_TEXT}, $text_symbol_ofs{"G\$_start_"}, 1) =~ m@\A[\xFC\xFD]@)));  # cld or fld.
   for my $segment_name (@SEGMENT_ORDER) {
     die "$0: assert: segment size mismatch for $segment_name\n" if
         length($ledata{$segment_name}) != ($segment_name eq "_BSS" ? 0 : $segment_sizes{$segment_name});
   }
 
+  my $exef;  # May be of .com, .exe or .nasm format.
+  eval {
+  die "$0: fatal: cannot open for writing: $exefn\n" if !open($exef, ">", $exefn);
   if ($is_nasm) {  # emit_nasm.
     my($fullprog_code, $fullprog_data, $fullprog_bss, $fullprog_end);
     # No need to disambiguate NASM symbols like code_end, because
@@ -673,19 +765,19 @@ times -(((bss_end-bss_start)+(data_end-data_start)+(code_end-code_start+0x100)+3
     } elsif ($need_clear_ax) {
       print $exef qq(db 0x31, 0xC0  ; xor ax, ax\n  ; argc=0);
     }
-    if (defined($symbol_ofs{"G\$_start_"})) {  # TODO(pts): Keep these consistent with emit_executable.
+    if (defined($text_symbol_ofs{"G\$_start_"})) {  # TODO(pts): Keep these consistent with emit_executable.
       if ($is_exe and $does_entry_point_return) {
         print $exef qq(db 0xE8\ndw 0x0000+G\$_start_-\(\$+2\)  ; call G\$_start_\n);
         print $exef qq(db 0xB8, 0, 0x4C, 0xCD, 0x21  ; mov ax, 0x4c00;; int 0x21  ; EXIT with code 0.\n);
-      } elsif ($symbol_ofs{"G\$_start_"} == 0) {  # Code starts with _start.
+      } elsif ($text_symbol_ofs{"G\$_start_"} == 0) {  # Code starts with _start.
       } else {
         print $exef qq(db 0xE9\ndw 0x0000+G\#_start_-\(\$+2\)  ; jmp strict word G\$_start_\n);
       }
-    } elsif (defined($symbol_ofs{"G\$main_"}) and $do_use_argc) {
+    } elsif (defined($text_symbol_ofs{"G\$main_"}) and $do_use_argc) {
       # OpenWatcom wcc does not support non-constant initializers, so we can call
       # main now.
       print $exef qq(xor dx, dx\ncall G\$main_\nmov ah, 0x4c  ; dx: argv=NULL; EXIT, exit code in al\nint 0x21\n);
-    } elsif (defined($symbol_ofs{"G\$main_"})) {
+    } elsif (defined($text_symbol_ofs{"G\$main_"})) {
       print $exef qq(call G\$main_\nmov ah, 0x4c  ; EXIT, exit code in al\nint 0x21\n);
     }
     for my $segment_name (@SEGMENT_ORDER) {
@@ -703,25 +795,25 @@ times -(((bss_end-bss_start)+(data_end-data_start)+(code_end-code_start+0x100)+3
         $need_clear_ax ? "\x31\xC0" : "";  # xor ax, ax  ; argc=0.
     # $call_main is affected by fixups below.
     my($call_main, $call_main_symbol, $call_main_ofs);
-    if (defined($symbol_ofs{"G\$_start_"})) {
+    if (defined($text_symbol_ofs{"G\$_start_"})) {
       if ($is_exe and $does_entry_point_return) {
         # call _start_;; mov ax, 0x4c00;; int 0x21  ; EXIT with code 0.
         $call_main = pack("ava5", "\xE8", 0, "\xB8\x00\x4C\xCD\x21");
         $call_main_symbol = "G\$_start_"; $call_main_ofs = length($call_main) - 7;
-      } elsif ($symbol_ofs{"G\$_start_"} == 0) {  # Code starts with _start.
+      } elsif ($text_symbol_ofs{"G\$_start_"} == 0) {  # Code starts with _start.
         $call_main = ""; $call_main_symbol = $call_main_ofs = undef;
       } else {
         # !! TODO(pts): Instead of the jmp, move the code of $clear_bss and $call_main just above _start.
         $call_main = pack("a1v", "\xE9", 0);  # jmp strict word _start_
         $call_main_symbol = "G\$_start_"; $call_main_ofs = length($call_main) - 2;
       }
-    } elsif (defined($symbol_ofs{"G\$main_"}) and $do_use_argc) {
+    } elsif (defined($text_symbol_ofs{"G\$main_"}) and $do_use_argc) {
       # OpenWatcom wcc does not support non-constant initializers, so we can call
       # main now.
       # xor dx, dx;; call G$main_;; mov ah, 0x4c;; int 0x21  ; dx: argv=NULL; EXIT, exit code in al
       $call_main = pack("a3va4", "\x31\xD2\xE8", 0, "\xB4\x4C\xCD\x21");
       $call_main_symbol = "G\$main_"; $call_main_ofs = length($call_main) - 6;
-    } elsif (defined($symbol_ofs{"G\$main_"})) {
+    } elsif (defined($text_symbol_ofs{"G\$main_"})) {
       # call main_;; mov ah, 0x4c;; int 0x21  ; EXIT, exit code in al
       $call_main = pack("a1va4", "\xE8", 0, "\xB4\x4C\xCD\x21");
       $call_main_symbol = "G\$main_"; $call_main_ofs = length($call_main) - 6;
@@ -739,7 +831,7 @@ times -(((bss_end-bss_start)+(data_end-data_start)+(code_end-code_start+0x100)+3
     my %symbol_vofs;  # $symbol => $vofs + $obj_ofs.
     for my $segment_name (keys %segment_symbols) {
       my $this_segment_vofs = $segment_vofs{$segment_name};
-      $symbol_vofs{"OBJ_SEGMENT_${segment_name}_start"} = $this_segment_vofs;
+      $symbol_vofs{"S\$${segment_name}"} = $this_segment_vofs;
       for my $pair (@{$segment_symbols{$segment_name}}) {
         my($ofs, $symbol) = @$pair;
         $symbol_vofs{$symbol} = $this_segment_vofs + $ofs;
@@ -782,19 +874,17 @@ times -(((bss_end-bss_start)+(data_end-data_start)+(code_end-code_start+0x100)+3
     }
   }
   };  # End of eval block.
-  close($f) if $f;
   close($exef) if $exef;
   if ($@) { print STDERR $@; exit(4 + $is_nasm); }
 }
 
 # --- End of linker, main code continues.
 
-my $objfn = "$SRCBASE.tmp.obj";
 if ($PL eq "-ce" or $PL eq "-cn") {
   my $is_nasm = $PL eq "-cn" ? 1 : 0;
-  my $exefn = $is_nasm ? "$SRCBASE.tmp.nasm" : $EXEOUT;
-  print_command("//link", $EXT, $CPUF, $is_nasm,  $exefn, $objfn) if !length($Q);
-  link_executable($is_nasm,  $exefn, $objfn);
+  my $exefn = $is_nasm ? "$in1base.tmp.nasm" : $EXEOUT;
+  print_command("//link", "-bt=$EXT", $CPUF, "--nasm=$is_nasm",  "-fe=$exefn", @objfns) if !length($Q);
+  link_executable($is_nasm,  $exefn, @objfns);
   # .nasm output ($EXEFN) cannot be used to produce an .obj file again (i.e. nasm -f obj).
   # TODO(pts): Add support for this, preferably autodetection.
   if ($is_nasm and run_command("nasm", "-f", "bin", "-o", $EXEOUT, $exefn)) {
@@ -802,7 +892,7 @@ if ($PL eq "-ce" or $PL eq "-cn") {
   }
 } elsif ($PL eq "-cw") {
   # Output of wdis ($EXEOUT) can be fed to wasm again to produce an .obj file.
-  if (run_command("wdis", "-a", "-fi", "-i=\@", $objfn, " > $EXEOUT")) {
+  if (run_command("wdis", "-a", "-fi", "-i=\@", $objfns[0], " > $EXEOUT")) {
     print STDERR "$0: fatal: wdis failed\n"; exit(7);
   }
 }
