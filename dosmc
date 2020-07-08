@@ -1,4 +1,12 @@
-#! /bin/sh --
+#! /bin/sh
+eval '(exit $?0)' && eval 'PERL_BADLANG=x;PATH="$PATH:.";export PERL_BADLANG\
+;exec perl -x -S -- "$0" ${1+"$@"};#'if 0;eval 'setenv PERL_BADLANG x\
+;setenv PATH "$PATH":.;exec perl -x -S -- "$0" $argv:q;#'.q
+#!perl -w
++push@INC,'.';$0=~/(.*)/s;do(index($1,"/")<0?"./$1":$1);die$@if$@__END__+if 0
+;#Don't touch/remove lines 1--7: http://www.inf.bme.hu/~pts/Magic.Perl.Header
+#
+# dosmc: C compiler driver to produce tiny DOS .exe and .com executables
 # by pts@fazekas.hu at Thu Jun 25 00:59:56 CEST 2020
 #
 # TODOs:
@@ -14,118 +22,256 @@
 # !! Optimize away everything if the first instruction by the entry point is `ret' or exit.
 # !! Optimize away unused basic blocks from .text.
 #
+# !! Cleanup flag to remove .tmp files.
 # !! Allow .obj files from NASM, give source example for section.
 # !! Allow .nasm source files, give source example for section.
 # !! Allow .obj files from A86, give source example for section.
 # !! Allow .obj files from WASM, give source example for section.
 # !! Make simple_nasm_exe.nasm work (ds, ss, sp setup is unnecessary, remove that).
+#
 
-unset MYDIR BTARG ARG EXT LASTARG SRC SRCBASE EXEOUT Q PL PLL NFARGC NASMCPU CPUF
+BEGIN { $^W = 1 }
+use integer;
+use strict;
 
-MYDIR="${0%/*}"
+my $MYDIR = $0;
+die "$0: fatal: script directory not specified\n" if $MYDIR !~ s@/+[^/]+\Z(?!\n)@@;
+die "$0: fatal: bad current directory: $MYDIR\n" if $MYDIR =~ m@:@;  # $ENV{PATH} separator. TODO(pts): Port to Win32.
 
-EXT=; Q=-q; CPUF=-0; PL=-ce
-# Specify these interesting wcc or wcl flags near the beginning.
-while test $# != 0; do
-  case "$1" in
-   -pl | -zs | -c | -ce | -cn | -cw) PL="$1" ;;  # Do preprocessing (-pl), syntax check (-zs), compile to .obj (-c), emit exec without nasm (nonstandard) (-ce), emit exec with nasm (nonstandard) (-cw), compile to .wasm (nonstandard) (-cw).
-   -q) Q=-q ;;  # Quiet. Default.
-   -nq) Q= ;;
-   -bt=dos | -bt=exe) EXT=exe  ;; # Default.
-   -bt=com | -mt) EXT=com ;;
-   -fo=* | -fe=*) EXEOUT="${1#*=}" ;;  # `wcc -fo=...' for object files; `wcl -fe=...' for executable files. For dosmc, it's final output file.
-   -ms) ;;
-   -m*) echo "$0: fatal: only -ms (small memory model) supported: $1" >&2; exit 1 ;;
-   -[0-6]) CPUF="$1" ;;
-   -bt*) echo "$0: fatal: unsupported target: $1" >&2; exit 1 ;;
-   -b* | -zW* | -zw*) echo "$0: fatal: unsupported Windows target: $1" >&2; exit 1 ;;
-   -ecw) ;;  # We support only the Watcom default calling convention (and name mangling).
-   -ec*) echo "$0: fatal: unsupported default calling convention: $1" >&2; exit 1 ;;
-   *) break ;;  # All other flags will be passed to wcc verbatim.
-  esac
-  shift
-done
-for ARG in "$@"; do
-  case "$ARG" in
-   -*) ;;
-   *) NFARGC="$NFARGC." ; LASTARG="$ARG" ;;
-  esac
-done
+if (!@ARGV or $ARGV[0] eq "-?" or $ARGV[0] eq "-h" or $ARGV[0] eq "--help") {
+  die "$0: fatal: cannot redirect stdout\n" if !@ARGV and !open(STDOUT, ">&", \*STDERR);
+  print "dosmc: C compiler driver to produce tiny DOS .exe and .com executables\n";
+  print "This is free software, GNU GPL >=2.0. There is NO WARRANTY. Use at your risk.\n";
+  print "Usage: $0 [<dosmc-flag> ...] [<wcc-flag> ...] <prog.c>\n";
+  print "To compile DOS .exe, specify no flag. To compile DOS .com, specify -bt=com\n";
+  print "See details on https://github.com/pts/dosmc\n";
+  exit(@ARGV ? 0 : 1);
+}
 
-if test $# = 0 || test "$1" = "-?" || test "$1" = -h || test "$1" = --help; then
-  test $# = 0 && exec >&2
-  echo "dosmc: C compiler driver to produce tiny DOS .exe and .com executables"
-  echo "This is free software, GNU GPL >=2.0. There is NO WARRANTY. Use at your risk."
-  echo "Usage: $0 [<dosmc-flag> ...] [<wcc-flag> ...] <prog.c>"
-  echo "To compile DOS .exe, specify no flag. To compile DOS .com, specify -bt=com"
-  echo "See details on https://github.com/pts/dosmc"
-  test $# = 0 && exit 1
-  exit
-fi
-if test -z "$NFARGC"; then
-  echo "$0: fatal: missing .c source file argument" >&2
-  exit 1
-fi
-if test "$NFARGC" != .; then
-  echo "$0: fatal: moultiple .c source file arguments" >&2
-  exit 1
-fi
-if test "${LASTARG%.c}" = "$LASTARG"; then
-  echo "$0: fatal: source file must be .c: $LASTARG" >&2
-  exit 1
-fi
+my $ARG = "";
+my $EXT = "";
+my $EXEOUT = "";
+my $Q = "-q";
+my $PL = "-ce";
+my $CPUF = "-0";
+my @sources;
+my @wcc_cmd = ('wcc');
+my @wcc_args;
 
-if ! test -x "$MYDIR/ow2bin/wcc"; then
-  echo "$0: fatal: missing executable $MYDIR/ow2bin/wcc; run $MYDIR/download_openwatcom.sh first" >&2
-  exit 1
-fi
-unset WATCOM INCLUDE
-SRC="$LASTARG"; SRCBASE="${SRC%.*}"
-if ! test -f "$SRC"; then
-  echo "$0: fatal: source file missing: $SRC" >&2
-  exit 1
-fi
-if test -z "$EXT"; then
-  case "$EXEOUT" in
-   *.com | *.COM) EXT=com ;;
-   *) EXT=exe ;;
-  esac
-fi
-if test "$PL" = -cn || test "$PL" = -ce; then
-  test "$EXEOUT" || EXEOUT="$SRCBASE.$EXT"
-  set -- -fo="$SRCBASE.tmp.obj" "$@"
-elif test "$PL" = -cw; then
-  test "$EXEOUT" || EXEOUT="$SRCBASE.wasm"
-  set -- -fo="$SRCBASE.tmp.obj" "$@"
-else
-  if test "$PL" = -c; then
-    test "$EXEOUT" || EXEOUT="$SRCBASE.obj"
-  else
-    PLL="$PL"
-  fi
-  test "$EXEOUT" && set -- -fo="$EXEOUT" "$@"
-fi
-set -- -D__DOSMC__ "$@"
-test "$EXT" = com && set -- -D__DOSMC_COM__ "$@"
-NASMCPU=8086
-test "$CPUF" = -0 || NASMCPU="${CPUF#-}86"
+for my $arg (@ARGV) {
+  if ($arg eq "--" or $arg eq "-" or !length($arg)) {
+    die "$0: fatal: unsupported argument: $arg\n";
+  } elsif ($arg eq "-pl" or $arg eq "-zs" or $arg eq "-c" or $arg eq "-ce" or $arg eq "-cn" or $arg eq "-cw") {
+    $PL = $arg;  # Do preprocessing (-pl), syntax check (-zs), compile to .obj (-c), emit exec without nasm (nonstandard) (-ce), emit exec with nasm (nonstandard) (-cw), compile to .wasm (nonstandard) (-cw).
+  } elsif ($arg eq "-q") {
+    $Q = $arg;  # Quiet. Default.
+  } elsif ($arg eq "-nq") {
+    $Q = "";  # Quiet. Default.
+  } elsif ($arg eq "-bt=dos" or $arg eq "-bt=exe") {
+    $EXT = "exe";  # Default.
+  } elsif ($arg eq "-bt=com" or $arg eq "-mt") {
+    $EXT = "com";  # Default.
+  } elsif ($arg =~ m@\A-bt@) {
+    die"$0: fatal: unsupported target: $arg\n";
+  } elsif ($arg =~ m@\A-(?:fo|fe)=(.*)\Z(?!\n)@s) {
+    $EXEOUT = $1;  # `wcc -fo=...' for object files; `wcl -fe=...' for executable files. For dosmc, it's final output file.
+  } elsif ($arg eq "-ms") {
+  } elsif ($arg =~ m@\A-m@) {
+    die "$0: fatal: only -ms (small memory model) supported: $arg\n";
+  } elsif ($arg =~ m@\A-[0-6]\Z(?!\n)@) {
+    $CPUF = $arg;
+  } elsif ($arg =~ m@\A-(?:b|zW|zw)@) {
+    die "$0: fatal: unsupported Windows target: $arg\n";
+  } elsif ($arg eq "-ecw") {  # We support only the Watcom default calling convention (and name mangling).
+  } elsif ($arg =~ m@\A-ec@) {
+    die "$0: fatal: unsupported default calling convention: $arg\n";
+  } elsif ($arg =~ m@\A-@) {
+    push @wcc_args, $arg;
+  } elsif ($arg =~ m@[.]c\Z(?!\n)@) {
+    push @sources, $arg;
+  } else {
+    die "$0: fatal: bad file extension for source file (must be .c): $arg\n";
+  }
+}
+$EXT = $EXEOUT =~ m@[.](?:com|COM)\Z(?!\n)@ ? "com" : "exe" if !length($EXT);
+die "$0: fatal: missing source file argument\n" if !@sources;
+for my $src (@sources) {
+  die "$0: fatal: source file not found: $src\n" if !-f($src);
+}
+die "$0: fatal: multiple source file arguments\n" if @sources > 1;  # TODO(pts): Relax this.
 
-LINKER_CODE='
-  BEGIN { $^W = 1 }
-  use integer;
-  use strict;
+die "$0: fatal: missing executable $MYDIR/ow2bin/wcc; run $MYDIR/download_openwatcom.sh first\n" if !-x("$MYDIR/ow2bin/wcc");
+delete $ENV{WATCOM};
+delete $ENV{INCLUDE};
+$ENV{PATH} = "/bin:/usr/bin" if !defined($ENV{PATH}) or !length($ENV{PATH});  # TODO(pts): Port to Win32.
+$ENV{PATH} = "$MYDIR/ow2bin:$ENV{PATH}";  # TODO(pts): Port to Win32.
 
-  $0 = "dosmc-linker-"; $0 .= $ARGV[0] if @ARGV; $0 .= "-nasm" if $ARGV[2];
-  die "$0: fatal: missing args\n" if @ARGV != 3;
-  my($EXT, $NASMCPU, $is_nasm) = @ARGV;
+my $SRC = $sources[0];
+my $SRCBASE = $SRC; $SRCBASE =~ s@[.][^./]+\Z(?!\n)@@s;  # TODO(pts): Port to Win32.
+my $PLL = "";
+if ($PL eq "-cn" or $PL eq "-ce") {
+  # !! TODO(pts): Add -ca to produce .nasm output.
+  $EXEOUT = "$SRCBASE.$EXT" if !length($EXEOUT);
+  push @wcc_cmd, "-fo=$SRCBASE.tmp.obj";
+} elsif ($PL eq "-cw") {
+  $EXEOUT = "$SRCBASE.wasm" if !length($EXEOUT);
+  push @wcc_cmd, "-fo=$SRCBASE.tmp.obj";
+} else {
+  if ($PL eq "-c") {
+    $EXEOUT = "$SRCBASE.obj" if !length($EXEOUT);
+  } else {
+    $PLL = $PL;
+  }
+  push @wcc_cmd, "-fo=$EXEOUT" if length($EXEOUT);
+}
+
+# Quote string from Bourne-like shells.
+# !! Port this to Win32.
+sub shqe($) {
+  return $_[0] if $_[0]=~/\A[-.\/\w][-.\/\w=]*\Z(?!\n)/;
+  my $S=$_[0];
+  $S=~s@'@'\\''@g;
+  "'$S'"
+}
+
+sub print_command(@) {
+  my $redirect = "";
+  $redirect .= " >" . shqe(substr(pop(@_), 3)) if @_ and substr($_[-1], 0, 3) eq " > ";
+  my $cmdstr = join(" ", map { shqe($_) } @_);
+  select(STDOUT); $| = 1; print ": $cmdstr$redirect\n";
+}
+
+sub run_command(@) {
+  print_command(@_) if !length($Q);
+  if (substr($_[-1], 0, 3) eq " > ") {  # Redirect stdout.
+    die "$0: assert: command too short\n" if @_ < 2;  # 2 for shell word splitting.
+    my $fn = substr(pop(@_), 3);
+    my $f;
+    die "$0: fatal: cannot open for writing: redirect stdout\n" if !open($f, ">", $fn);
+    my $old_stdoutf;
+    die "$0: fatal: cannot redirect old stdout\n" if !open($old_stdoutf, ">&", \*STDOUT);
+    die "$0: fatal: cannot redirect stdout\n" if !open(STDOUT, ">&", $f);
+    close($f);
+    my $status = system(@_);
+    die "$0: fatal: cannot redirect back stdout\n" if !open(STDOUT, ">&", $old_stdoutf);
+    close($old_stdoutf);
+    $status
+  } else {
+    die "$0: assert: command too short\n" if @_ < 2;  # 2 for shell word splitting.
+    system(@_)  # Returns 0 on success.
+  }
+}
+
+# Corresponding `wcc: owcc' flags:
+# -v: lack of -q
+# -bdos: -bt=dos
+# -ms: -mcomodel=s (default)
+# -i=... : -I...
+# -s: -fno-stack-check
+# -os: -Os  TODO(pts): Should we do -om -oi -ol (from -ox) as well?
+# -0: -march=i86
+# -W: ??
+# ??: -W
+# -w4: -Wall
+# -wx: -Wextra
+# -we: -Werror
+# -wcd=202: -Wcd=202 ??
+# -D...: -D...
+# (default to generate obj, do not link): -c
+# -fo=...: -o ...
+# -fr: ?? Set error filename.
+# -pl: -E
+# No need to set $WATCOM or to extend $PATH.
+# 202: symbol defined but not referenced (useful for static functions).
+push @wcc_cmd, "-D__DOSMC__";
+push @wcc_cmd, "-D__DOSMC_COM__" if $EXT eq "com";
+push @wcc_cmd, $Q if length($Q);
+push @wcc_cmd, $PLL if length($PLL);
+push @wcc_cmd, "-bt=dos", "-ms", "-i=$MYDIR", "-s", "-os", "-W", "-w4", "-wx", "-we", "-wcd=202", $CPUF, "-fr", @wcc_args, $SRC;
+if (run_command(@wcc_cmd)) {
+  print STDERR "$0: fatal: wcc failed\n"; exit(2);
+}
+
+# --- Linker: Reads .obj files, writes .exe and .com files (for equivalent .nasm files).
+
+# Checks if the entry point contains an instructions to exit immediately,
+# return exit code (0..255) if found, otherwise returns undef.
+sub get_8086_exit_code($$) {
+  my($ledatar, $symbol_ofsr) = @_;
+  pos($ledatar->{_TEXT}) = defined($symbol_ofsr->{_start_}) ? $symbol_ofsr->{_start_} : $symbol_ofsr->{main_};
+  return 0 if $ledatar->{_TEXT} =~ /\G(?:\x31\xC0)?\xC3/gcs;  # xor ax, ax;; ret
+  $ledatar->{_TEXT} =~ /\G[\x06\x0E\x16\x1E\x50-\x57]+/gcs;  # Skip some register pushes.
+  # TODO(pts): Add skipping of (sub sp, ...) for local variables.
+  return unpack("C", $1) if
+      $ledatar->{_TEXT} =~ /\G\xB8(.)\x4C\xCD\x21/gcs or  # mov ax, 0x4c??;; int 0x21
+      $ledatar->{_TEXT} =~ /\G\xB4\x4C\xB0(.)\xCD\x21/gcs or  # mov ah, 0x4c;; mov al, 0x??;; int 0x21
+      $ledatar->{_TEXT} =~ /\G\xB0(.)\xB4\x4C\xCD\x21/gcs or  # mov al, 0x??;; mov ah, 0x4c;; int 0x21
+      $ledatar->{_TEXT} =~ /\G\xB8(.).\xC3/gcs or  # mov ax, 0x--??;; ret
+      $ledatar->{_TEXT} =~ /\G\xB0(.)\xC3/gcs;  # mov al, 0x??;; ret
+  undef
+}
+
+sub maybe_contains_8086_str($) {
+  # !! TODO(pts): Add proper 8080 disassembler for detecting these instructions.
+  $_[0] =~ y@\x6C-\x6F\xA4-\xA7\xAA-\xAF@@  # 8086 string instructions.
+}
+
+my @SEGMENT_ORDER = qw(_TEXT CONST CONST2 _DATA _BSS);  # Constant, OpenWatcom wcc.
+my %ASM_DATA_OP = (1 => "db", 2 => "dw", 4 => "dd", 8 => "dq");  # Constant, nasm.
+
+sub emit_nasm_segment($$$$$$) {
+  my($segment_name, $exef, $size, $data, $symbolsr, $fixupr) = @_;
+  print $exef "OBJ_SEGMENT_${segment_name}_start:\n";
+  print $exef "OBJ_SEGMENT_${segment_name}_size equ $size\n";
+
+  # Sort by ofs ascending.
+  my @symbols = sort { $a->[0] <=> $b->[0] or $a->[1] cmp $b->[1] } @$symbolsr;
+  my $fi = 0; my $si = 0; my $i = 0;  # $fixupr is already sorted.
+  my $is_bss = $segment_name eq "_BSS";
+  my $chunk_sub = $segment_name eq "_BSS" ? sub { my $size = $_[0] - $i; print $exef "resb $size\n"; $i = $_[0]; } : sub {
+    my $j = $_[0];
+    while ($fi < @$fixupr and $fixupr->[$fi][1] < $j) {  # Apply fixup.
+      my($endofs, $ofs, $ltypem, $symbol) = @{$fixupr->[$fi++]};
+      my $line = unpack("H*", substr($data, $i, $ofs - $i)); $line =~ s@(..)(?=.)@$1, 0x@sg; print $exef "db 0x$line\n";
+      my $base = sprintf("0x%x", unpack("v", substr($data, $ofs, 2)));
+      my $size = $endofs - $ofs;
+      my $rel = $ltypem < 0 ? "-(\$+$size)" : "";
+      print $exef "$ASM_DATA_OP{$size} $base+$symbol$rel\n";
+      $i = $endofs;
+    }
+    my $line = unpack("H*", substr($data, $i, $j - $i)); $line =~ s@(..)(?=.)@$1, 0x@sg; print $exef "db 0x$line\n";
+    $i = $j;
+  };
+  while ($si < @symbols) {
+    my $j = $symbols[$si][0];
+    if ($j > $size or $j < $i) {
+      print $exef "$symbols[$si][1] equ $j+OBJ_SEGMENT_${segment_name}_start\n";
+      ++$si; next
+    }
+    $chunk_sub->($j) if $j > $i;
+    for (; $si < @symbols and $symbols[$si][0] == $j; ++$si) {
+      print $exef "$symbols[$si][1]:\n";
+    }
+  }
+  $chunk_sub->($size) if $size > $i;
+}
+
+sub link_executable($$@) {
+  my $is_nasm = $_[0]; my $exefn = $_[1];  # Also uses: $CPUF and $EXT.
+  local $0 = "dosmc-linker-$EXT" . ($is_nasm ? "-nasm" : "");
+  my $NASMCPU = $CPUF eq "-0" ? "8086" : substr($CPUF, 1) . "86";
+  splice @_, 0, 2;  # Remove the first 2 arguments, keep .obj files.
+  die "$0: assert: single .obj file expected" if @_ != 1;
+  my $objfn = $_[0];
   die "$0: fatal: unknown EXT: $EXT\n" if $EXT ne "exe" and $EXT ne "com";
   my $is_exe = $EXT eq "exe";  # Otherwise .com.
-
+  my $exef;  # May be of .com, .exe or .nasm format.
+  my $f;  # Of OMF .obj format, typically created by wcc or `nasm -f obj'.
+  eval {
+  die "$0: fatal: cannot open for writing: $exefn\n" if !open($exef, ">", $exefn);
+  die "$0: fatal: cannot open obj file for reading: $objfn\n" if !open($f, "<", $objfn);
   # Based on: https://pierrelib.pagesperso-orange.fr/exec_formats/OMF_v1.1.pdf
-  my $f = \*STDIN;
   my @lnames = ("-LN0");
-  my @SEGMENT_ORDER = qw(_TEXT CONST CONST2 _DATA _BSS);  # Constant, OpenWatcom.
-  my %ASM_DATA_OP = (1 => "db", 2 => "dw", 4 => "dd", 8 => "dq");
   my %segment_name_ok = map { $_ => 1 } @SEGMENT_ORDER;
   my %segment_sizes;
   my @segment_names = ("-SN");
@@ -306,23 +452,7 @@ LINKER_CODE='
   die "$0: fatal: too many entry points (main functions)\n" if $entry_count > 1;
   die "$0: fatal: missing entry point (main function)\n" if $entry_count == 0;
 
-  # Checks if the entry point contains an instructions to exit immediately,
-  # return exit code (0..255) if found, otherwise returns undef.
-  sub get_8086_exit_code() {
-    pos($ledata{_TEXT}) = defined($symbol_ofs{_start_}) ? $symbol_ofs{_start_} : $symbol_ofs{main_};
-    return 0 if $ledata{_TEXT} =~ /\G(?:\x31\xC0)?\xC3/gcs;  # xor ax, ax;; ret
-    $ledata{_TEXT} =~ /\G[\x06\x0E\x16\x1E\x50-\x57]+/gcs;  # Skip some register pushes.
-    # TODO(pts): Add skipping of (sub sp, ...) for local variables.
-    return unpack("C", $1) if
-        $ledata{_TEXT} =~ /\G\xB8(.)\x4C\xCD\x21/gcs or  # mov ax, 0x4c??;; int 0x21
-        $ledata{_TEXT} =~ /\G\xB4\x4C\xB0(.)\xCD\x21/gcs or  # mov ah, 0x4c;; mov al, 0x??;; int 0x21
-        $ledata{_TEXT} =~ /\G\xB0(.)\xB4\x4C\xCD\x21/gcs or  # mov al, 0x??;; mov ah, 0x4c;; int 0x21
-        $ledata{_TEXT} =~ /\G\xB8(.).\xC3/gcs or  # mov ax, 0x--??;; ret
-        $ledata{_TEXT} =~ /\G\xB0(.)\xC3/gcs;  # mov al, 0x??;; ret
-    undef
-  }
-
-  my $exit_code = get_8086_exit_code();
+  my $exit_code = get_8086_exit_code(\%ledata, \%symbol_ofs);
   if (defined($exit_code)) {  # Shortcut if the program immediately exits.
     for my $segment_name (@SEGMENT_ORDER) {
       $ledata{$segment_name} = ""; $segment_sizes{$segment_name} = 0; $fixupp{$segment_name} = []; $segment_symbols{$segment_name} = [];
@@ -338,11 +468,6 @@ LINKER_CODE='
     $segment_sizes{_TEXT} = length($ledata{_TEXT});
   }
 
-  sub maybe_contains_8086_str($) {
-    # !! TODO(pts): Add proper 8080 disassembler for detecting these instructions.
-    $_[0] =~ y@\x6C-\x6F\xA4-\xA7\xAA-\xAF@@  # 8086 string instructions.
-  }
-
   my $does_entry_point_return = !defined($exit_code);  # TODO(pts): Smarter detection.
   my $is_data_used = !defined($exit_code);
   my $need_clear_ax = (defined($symbol_ofs{main_}) and $do_use_argc);
@@ -355,47 +480,7 @@ LINKER_CODE='
         length($ledata{$segment_name}) != ($segment_name eq "_BSS" ? 0 : $segment_sizes{$segment_name});
   }
 
-  sub emit_nasm_segment($) {
-    my $segment_name = $_[0];
-    my $size = $segment_sizes{$segment_name};
-    my $data = $ledata{$segment_name};
-    print "OBJ_SEGMENT_${segment_name}_start:\n";
-    print "OBJ_SEGMENT_${segment_name}_size equ $size\n";
-
-    # Sort by ofs ascending.
-    my @symbols = sort { $a->[0] <=> $b->[0] or $a->[1] cmp $b->[1] } @{$segment_symbols{$segment_name}};
-    my $fixupr = $fixupp{$segment_name};  # Already sorted.
-    my $fi = 0; my $si = 0; my $i = 0;
-    my $is_bss = $segment_name eq "_BSS";
-    my $chunk_sub = $segment_name eq "_BSS" ? sub { my $size = $_[0] - $i; print "resb $size\n"; $i = $_[0]; } : sub {
-      my $j = $_[0];
-      while ($fi < @$fixupr and $fixupr->[$fi][1] < $j) {  # Apply fixup.
-        my($endofs, $ofs, $ltypem, $symbol) = @{$fixupr->[$fi++]};
-        my $line = unpack("H*", substr($data, $i, $ofs - $i)); $line =~ s@(..)(?=.)@$1, 0x@sg; print "db 0x$line\n";
-        my $base = sprintf("0x%x", unpack("v", substr($data, $ofs, 2)));
-        my $size = $endofs - $ofs;
-        my $rel = $ltypem < 0 ? "-(\$+$size)" : "";
-        print "$ASM_DATA_OP{$size} $base+$symbol$rel\n";
-        $i = $endofs;
-      }
-      my $line = unpack("H*", substr($data, $i, $j - $i)); $line =~ s@(..)(?=.)@$1, 0x@sg; print "db 0x$line\n";
-      $i = $j;
-    };
-    while ($si < @symbols) {
-      my $j = $symbols[$si][0];
-      if ($j > $size or $j < $i) {
-        print "$symbols[$si][1] equ $j+OBJ_SEGMENT_${segment_name}_start\n";
-        ++$si; next
-      }
-      $chunk_sub->($j) if $j > $i;
-      for (; $si < @symbols and $symbols[$si][0] == $j; ++$si) {
-        print "$symbols[$si][1]:\n";
-      }
-    }
-    $chunk_sub->($size) if $size > $i;
-  }
-
-  sub emit_nasm() {
+  if ($is_nasm) {  # emit_nasm.
     my($fullprog_code, $fullprog_data, $fullprog_bss, $fullprog_end);
     # No need to disambiguate NASM symbols like code_end, because
     # wcc adds _ prefix or suffix to all symbols (including static ones).
@@ -477,41 +562,37 @@ call__fullprog_end:  ; Make fullprog_code without fullprog_end fail.
 times -(((bss_end-bss_start)+(data_end-data_start)+(code_end-code_start+0x100)+3)>>16) db 0
 );
     }
-    print qq(bits 16\ncpu $NASMCPU\n);
-    print qq($fullprog_code\n);
-    print qq(db 0x16  ; push ss\ndb 0x1f  ; pop ds\n) if $is_exe and $is_data_used;
-    print qq(cld\n) if $need_clear_df;
+    print $exef qq(bits 16\ncpu $NASMCPU\n);
+    print $exef qq($fullprog_code\n);
+    print $exef qq(db 0x16  ; push ss\ndb 0x1f  ; pop ds\n) if $is_exe and $is_data_used;
+    print $exef qq(cld\n) if $need_clear_df;
     if ($do_clear_bss) {
-      print qq(push es\npush ds\npop es\nmov di, bss_start\nmov cx, (stack-bss_start+1)>>1\nxor ax, ax\nrep stosw\npop es\n);  # clear_bss.
+      print $exef qq(push es\npush ds\npop es\nmov di, bss_start\nmov cx, (stack-bss_start+1)>>1\nxor ax, ax\nrep stosw\npop es\n);  # clear_bss.
     } elsif ($need_clear_ax) {
-      print qq(db 0x31, 0xC0  ; xor ax, ax\n  ; argc=0);
+      print $exef qq(db 0x31, 0xC0  ; xor ax, ax\n  ; argc=0);
     }
     if (defined($symbol_ofs{_start_})) {  # TODO(pts): Keep these consistent with emit_executable.
       if ($is_exe and $does_entry_point_return) {
-        print qq(db 0xE8\ndw 0x0000+_start_-\(\$+2\)  ; call _start_\n);
-        print qq(db 0xB8, 0, 0x4C, 0xCD, 0x21  ; mov ax, 0x4c00;; int 0x21  ; EXIT with code 0.\n);
+        print $exef qq(db 0xE8\ndw 0x0000+_start_-\(\$+2\)  ; call _start_\n);
+        print $exef qq(db 0xB8, 0, 0x4C, 0xCD, 0x21  ; mov ax, 0x4c00;; int 0x21  ; EXIT with code 0.\n);
       } elsif ($symbol_ofs{_start_} == 0) {  # Code starts with _start.
       } else {
-        print qq(db 0xE9\ndw 0x0000+_start_-\(\$+2\)  ; jmp strict word _start_\n);
+        print $exef qq(db 0xE9\ndw 0x0000+_start_-\(\$+2\)  ; jmp strict word _start_\n);
       }
     } elsif (defined($symbol_ofs{main_}) and $do_use_argc) {
       # OpenWatcom wcc does not support non-constant initializers, so we can call
       # main now.
-      print qq(xor dx, dx\ncall main_\nmov ah, 0x4c  ; dx: argv=NULL; EXIT, exit code in al\nint 0x21\n);
+      print $exef qq(xor dx, dx\ncall main_\nmov ah, 0x4c  ; dx: argv=NULL; EXIT, exit code in al\nint 0x21\n);
     } elsif (defined($symbol_ofs{main_})) {
-      print qq(call main_\nmov ah, 0x4c  ; EXIT, exit code in al\nint 0x21\n);
+      print $exef qq(call main_\nmov ah, 0x4c  ; EXIT, exit code in al\nint 0x21\n);
     }
-    emit_nasm_segment("_TEXT");
-    print qq($fullprog_data\n);
-    emit_nasm_segment("CONST");  # String literals.
-    emit_nasm_segment("CONST2");  # Other global consts.
-    emit_nasm_segment("_DATA");
-    print qq($fullprog_bss\n);
-    emit_nasm_segment("_BSS");
-    print qq($fullprog_end\n);
-  }
-
-  sub emit_executable() {
+    for my $segment_name (@SEGMENT_ORDER) {
+      print $exef qq($fullprog_data\n) if $segment_name eq "CONST";  # Double-quoted string literals.
+      print $exef qq($fullprog_bss\n) if $segment_name eq "_BSS";
+      emit_nasm_segment($segment_name, $exef, $segment_sizes{$segment_name}, $ledata{$segment_name}, $segment_symbols{$segment_name}, $fixupp{$segment_name});
+    }
+    print $exef qq($fullprog_end\n);
+  } else {  # emit_executable.
     my $init_regs = "";
     $init_regs .= "\x16\x1F" if $is_exe and $is_data_used;  # push ss; pop ds
     $init_regs .= "\xFC" if $need_clear_df;  # String instructions (e.g. movsb, stosw) need df=0 (cld).
@@ -575,14 +656,14 @@ times -(((bss_end-bss_start)+(data_end-data_start)+(code_end-code_start+0x100)+3
       my $exe_header = pack("a2v11", "MZ", $image_size & 511, ($image_size + 511) >> 9, 0, 1,
           ($segment_sizes{_BSS} + $stack_align_size + $stack_size + 15-(-($data_size + $after_text_vofs) & 15)) >> 4,
           0xffff, $after_text_vofs >> 4, $data_size + $segment_sizes{_BSS} + $stack_align_size + $stack_size, 0, 8, 0);
-      print $exe_header;
+      print $exef $exe_header;
     }
     substr($clear_bss, 4, 2) = pack("v", $segment_vofs{_BSS}) if length($clear_bss) >= 6;
     substr($call_main, $call_main_ofs, 2) = pack("v", $symbol_vofs{$call_main_symbol} - ($call_main_ofs + 2 + $segment_vofs{call_main})) if
         defined($call_main_ofs);
     # Tiny version of
     # https://github.com/open-watcom/open-watcom-v2/blob/master/bld/clib/startup/a/cstrt086.asm
-    print $init_regs, $clear_bss, $call_main;
+    print $exef $init_regs, $clear_bss, $call_main;
     for my $segment_name (@SEGMENT_ORDER) {
       my $data = $ledata{$segment_name};
       my $this_segment_vofs = $segment_vofs{$segment_name};
@@ -594,68 +675,33 @@ times -(((bss_end-bss_start)+(data_end-data_start)+(code_end-code_start+0x100)+3
         $svofs -= $endofs + $this_segment_vofs if $ltypem < 0;
         substr($data, $ofs, 2) = pack("v", $svofs);
       }
-      print $data;
+      print $exef $data;
     }
   }
+  };  # End of eval block.
+  close($f) if $f;
+  close($exef) if $exef;
+  if ($@) { print STDERR $@; exit(4 + $is_nasm); }
+}
 
-  $is_nasm ? emit_nasm() : emit_executable()
-'
-export LINKER_CODE
+# --- End of linker, main code continues.
 
-test "$Q" || set -x  # echo commands run.
+my $objfn = "$SRCBASE.tmp.obj";
+if ($PL eq "-ce" or $PL eq "-cn") {
+  my $is_nasm = $PL eq "-cn" ? 1 : 0;
+  my $exefn = $is_nasm ? "$SRCBASE.tmp.nasm" : $EXEOUT;
+  print_command("//link", $EXT, $CPUF, $is_nasm,  $exefn, $objfn) if !length($Q);
+  link_executable($is_nasm,  $exefn, $objfn);
+  # .nasm output ($EXEFN) cannot be used to produce an .obj file again (i.e. nasm -f obj).
+  # TODO(pts): Add support for this, preferably autodetection.
+  if ($is_nasm and run_command("nasm", "-f", "bin", "-o", $EXEOUT, $exefn)) {
+    print STDERR "$0: fatal: nasm failed\n"; exit(6);
+  }
+} elsif ($PL eq "-cw") {
+  # Output of wdis ($EXEOUT) can be fed to wasm again to produce an .obj file.
+  if (run_command("wdis", "-a", "-fi", "-i=\@", $objfn, " > $EXEOUT")) {
+    print STDERR "$0: fatal: wdis failed\n"; exit(7);
+  }
+}
 
-# Corresponding `wcc: owcc' flags:
-# -v: lack of -q
-# -bdos: -bt=dos
-# -ms: -mcomodel=s (default)
-# -i=... : -I...
-# -s: -fno-stack-check
-# -os: -Os  TODO(pts): Should we do -om -oi -ol (from -ox) as well?
-# -0: -march=i86
-# -W: ??
-# ??: -W
-# -w4: -Wall
-# -wx: -Wextra
-# -we: -Werror
-# -wcd=202: -Wcd=202 ??
-# -D...: -D...
-# (default to generate obj, do not link): -c
-# -fo=...: -o ...
-# -fr: ?? Set error filename.
-# -pl: -E
-# No need to set $WATCOM or to extend $PATH.
-# 202: symbol defined but not referenced (useful for static functions).
-if ! "$MYDIR"/ow2bin/wcc $Q $PLL -bt=dos -ms -i="$MYDIR" -s -os -W -w4 -wx -we -wcd=202 "$CPUF" -fr "$@"; then
-  test "$Q" || set +x  # Don't echo commands run anymore.
-  echo "$0: fatal: wcc failed" >&2
-  exit 2
-fi
-if test "$PL" = -ce; then
-  if ! perl -e 'eval $ENV{LINKER_CODE}; die $@ if $@' -- "$EXT" "$NASMCPU" 0 <"$SRCBASE.tmp.obj" >"$EXEOUT"; then
-    test "$Q" || set +x  # Don't echo commands run anymore.
-    echo "$0: fatal: obj2executable failed" >&2
-    exit 4
-  fi
-elif test "$PL" = -cn; then
-  if ! perl -e 'eval $ENV{LINKER_CODE}; die $@ if $@' -- "$EXT" "$NASMCPU" 1 <"$SRCBASE.tmp.obj" >"$SRCBASE.tmp.nasm"; then
-    test "$Q" || set +x  # Don't echo commands run anymore.
-    echo "$0: fatal: obj2nasm failed" >&2
-    exit 5
-  fi
-  if ! nasm -f bin -I "$MYDIR" -o "$EXEOUT" "$SRCBASE.tmp.nasm"; then
-    test "$Q" || set +x  # Don't echo commands run anymore.
-    echo "$0: fatal: nasm failed" >&2
-    exit 6
-  fi
-elif test "$PL" = -cw; then
-  if ! "$MYDIR"/ow2bin/wdis -a -fi -i=@ "$SRCBASE.tmp.obj" >"$EXEOUT"; then
-    test "$Q" || set +x  # Don't echo commands run anymore.
-    echo "$0: fatal: wdis failed" >&2
-    exit 7
-  fi
-fi
-test "$Q" || set +x  # Don't echo commands run anymore.
-# : ndisasm -b 16 -e 24 -o 8 "$SRCBASE.exe" >"$SRCBASE.ndisasm"
-# : ndisasm -b 16 -o 0x100 "$SRCBASE.com" >"$SRCBASE.ndisasm"
-
-: "$0" OK.
+print ": $0 OK.\n" if !length($Q);
