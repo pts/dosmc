@@ -58,8 +58,8 @@ my $Q = "-q";
 my $PL = "-ce";
 my $CPUF = "-0";
 my @sources;
-my @wcc_cmd = ('wcc');
 my @wcc_args;
+my $has_c_source = 0;
 
 for my $arg (@ARGV) {
   if ($arg eq "--" or $arg eq "-" or !length($arg)) {
@@ -90,8 +90,9 @@ for my $arg (@ARGV) {
     die "$0: fatal: unsupported default calling convention: $arg\n";
   } elsif ($arg =~ m@\A-@) {
     push @wcc_args, $arg;
-  } elsif ($arg =~ m@[.](?:c|obj)\Z(?!\n)@) {
+  } elsif ($arg =~ m@[.](c|nasm|obj)\Z(?!\n)@) {
     push @sources, $arg;
+    $has_c_source = 1 if $1 eq "c";
   } else {
     die "$0: fatal: bad file extension for source file (must be .c or .obj): $arg\n";
   }
@@ -107,9 +108,8 @@ die "$0: fatal: missing executable $MYDIR/ow2bin/wcc; run $MYDIR/download_openwa
 my $in1base = $sources[0]; $in1base =~ s@[.][^./]+\Z(?!\n)@@s;  # TODO(pts): Port to Win32.
 my $PLL = "";
 if ($PL eq "-cn" or $PL eq "-ce") {
-  # !! TODO(pts): Add -ca to produce .nasm output.
+  # !! TODO(pts): Add -cm to produce .nasm output.
   $EXEOUT = "$in1base.$EXT" if !length($EXEOUT);
-  #push @wcc_cmd, "-fo=$in1base.tmp.obj";
   $is_multiple_sources_ok = 1;
 } elsif ($PL eq "-cw") {
   $EXEOUT = "$in1base.wasm" if !length($EXEOUT);
@@ -119,7 +119,7 @@ if ($PL eq "-cn" or $PL eq "-ce") {
   } else {
     $PLL = $PL;
     $is_multiple_sources_ok = 1 if $PL eq "-zs";
-    push @wcc_cmd, "-fo=$EXEOUT" if length($EXEOUT);
+    push @wcc_args, "-fo=$EXEOUT" if length($EXEOUT);
   }
 }
 die "$0: fatal: multiple source file arguments with $PL\n" if !$is_multiple_sources_ok and @sources > 1;
@@ -187,26 +187,41 @@ sub run_command(@) {
 # -pl: -E
 # No need to set $WATCOM or to extend $PATH.
 # 202: symbol defined but not referenced (useful for static functions).
-push @wcc_cmd, "-D__DOSMC__";  # TODO(pts): Add these and also $CPUF for .nasm.
-push @wcc_cmd, "-D__DOSMC_COM__" if $EXT eq "com";
+my @d_args;
+push @d_args, "-D__DOSMC__";  # TODO(pts): Add these and also $CPUF for .nasm.
+push @d_args, "-D__DOSMC_COM__" if $EXT eq "com";
+my @wcc_cmd = ('wcc', @d_args);
 push @wcc_cmd, $Q if length($Q);
 push @wcc_cmd, $PLL if length($PLL);
 push @wcc_cmd, "-bt=dos", "-ms", "-i=$MYDIR", "-s", "-os", "-W", "-w4", "-wx", "-we", "-wcd=202", $CPUF, "-fr", @wcc_args;
 my $wcc_cmd_size = @wcc_cmd;
+my $nasm_cpu = $CPUF eq "-0" ? "8086" : substr($CPUF, 1) . "86";
+my @nasm_cmd = ("nasm", @d_args, "-f", "obj", "--before", "cpu $nasm_cpu", "--before", "segment text");  # Default is `bits 16'.
+my $nasm_cmd_size = @nasm_cmd;
 my @objfns;
 my $do_objfn_arg = ($PL eq "-cw" or $PL eq "-ce" or $PL eq "-cn" or $PL eq "-c");
 my $forced_objfn = ($PL ne "-cw" and $PL ne "-ce" and $PL ne "-cn" and length($EXEOUT)) ? $EXEOUT : undef;
 for my $srcfn (@sources) {
-  if ($srcfn =~ m@[.]obj\Z(?!\n)@) { push @objfns, $srcfn; next }
-  my $srcbase = $srcfn; $srcbase =~ s@[.][^./]+\Z(?!\n)@@s;  # TODO(pts): Port to Win32.
+  my $srcbase = $srcfn;
+  my $ext = $srcbase =~ s@[.]([^./]+)\Z(?!\n)@@s ? $1 : "";  # TODO(pts): Port to Win32.
+  if ($ext eq "obj") { push @objfns, $srcfn; next }
   my $objfn = defined($forced_objfn) ? $forced_objfn : $PL eq "-c" ? "$srcbase.obj" : "$srcbase.tmp.obj";
   push @objfns, $objfn;
-  push @wcc_cmd, "-fo=$objfn" if $do_objfn_arg;
-  push @wcc_cmd, $srcfn;
-  if (run_command(@wcc_cmd)) {
-    print STDERR "$0: fatal: wcc failed\n"; exit(2);
+  if ($ext eq "nasm") {
+    die "$0: fatal: $PL with .nasm source not supported: $srcfn\n" if !$do_objfn_arg;
+    push @nasm_cmd, "-o", $objfn, $srcfn;
+    if (run_command(@nasm_cmd)) {
+      print STDERR "$0: fatal: nasm failed\n"; exit(3);
+    }
+    splice @nasm_cmd, $nasm_cmd_size;
+  } else {
+    push @wcc_cmd, "-fo=$objfn" if $do_objfn_arg;
+    push @wcc_cmd, $srcfn;
+    if (run_command(@wcc_cmd)) {
+      print STDERR "$0: fatal: wcc failed\n"; exit(2);
+    }
+    splice @wcc_cmd, $wcc_cmd_size;
   }
-  splice @wcc_cmd, $wcc_cmd_size;
 }
 
 # --- Linker: Reads .obj files, writes .exe and .com files (for equivalent .nasm files).
@@ -397,7 +412,11 @@ sub load_obj($$) {
       my($segment_size, $segment_name_idx) = unpack("vC", substr($data, 1, 3));
       die "$0: fatal: bad segment_name_idx\n" if $segment_name_idx >= @lnames;
       $segment_size = 0x10000 if $is_big;
-      my $segment_name = $lnames[$segment_name_idx];
+      # .obj output of wcc doesn't need uc and _ prefix, but output of nasm may need it.
+      my $segment_name = uc($lnames[$segment_name_idx]);
+      $segment_name =~ s@\A[_.]+@@;
+      $segment_name = "TEXT" if $segment_name eq "CODE";
+      substr($segment_name, 0, 0) = "_" if $segment_name !~ m@\ACONST@;
       die "$0: fatal: unsupported segment: $segment_name\n" if !$SEGMENT_NAME_OK{$segment_name};
       die "$0: fatal: duplicate segment: $segment_name\n" if exists($segment_sizes{$segment_name});
       $segment_sizes{$segment_name} = $segment_size;
@@ -501,11 +520,12 @@ sub load_obj($$) {
           die "$0: fatal: unknown FIXUPP EXTDEF index: $extdef_idx\n" if $extdef_idx >= @extdef;
           $symbol = $extdef[$extdef_idx];
           #print STDERR "info: FIXUPP 16-bit $is_self \@$ofs EXTDEF $symbol\n";
-        } elsif ($frame == 1 and $target == 4) {
+        } elsif (($frame == 1 and $target == 4) or  # Segment CONST in DGROUP, by wcc.
+                 ($frame == 5 and $target == 4)) {  # Segment CONST, by nasm.
           # We usually get it for string literals in CONST.
-          die "$0: fatal: EOF in FIXUPP target\n" if $i + 2 > $size;
-          my $segment_idx = vec($data, $i + 1, 8);
-          $i += 2;
+          die "$0: fatal: EOF in FIXUPP target\n" if $i + ($frame == 1 ? 2 : 1) > $size;
+          ++$i if $frame == 1;
+          my $segment_idx = vec($data, $i++, 8);
           die "$0: fatal: unknown segment: $segment_idx\n" if $segment_idx >= @segment_names;
           my $segment_name = $segment_names[$segment_idx];
           #print STDERR "info: FIXUPP 16-bit $is_self \@$ofs SEGMENT $segment_name\n";
@@ -557,7 +577,6 @@ sub load_obj($$) {
 sub link_executable($$@) {
   my $is_nasm = $_[0]; my $exefn = $_[1];  # Also uses: $CPUF and $EXT.
   local $0 = "dosmc-linker-$EXT" . ($is_nasm ? "-nasm" : "");
-  my $NASMCPU = $CPUF eq "-0" ? "8086" : substr($CPUF, 1) . "86";
   splice @_, 0, 2;  # Remove the first 2 arguments, keep .obj files.
   die "$0: fatal: unknown EXT: $EXT\n" if $EXT ne "exe" and $EXT ne "com";
   my %undefined_symbols;
@@ -571,7 +590,7 @@ sub link_executable($$@) {
   my @skipped_objfns;
   my $do_use_argc = 0;
   my $obji = 0;
-  my $has_small_code = 0;
+  my $has_small_code = !$has_c_source;  # Ignore (assume true) if no .c files in the command-line.
   while (@_) {  # Next round.
     my $prev_obji = $obji;
     for my $objfn (@_) {
@@ -634,7 +653,7 @@ sub link_executable($$@) {
   my @undefined_symbols = map { substr($_, 2) } sort keys %undefined_symbols;  # Strip "G\$" prefix.
   die "$0: fatal: undefined symbols: @undefined_symbols\n" if @undefined_symbols;
 
-  die "$0: fatal: missing symbol: G\$_small_code_\n" if !$has_small_code;  # TODO(pts): If all source files are .nasm, ignore it. How do we discover?
+  die "$0: fatal: missing symbol: _small_code_\n" if !$has_small_code;  # TODO(pts): If all source files are .nasm, ignore it. How do we discover?
 
   my $entry_count = (defined($text_symbol_ofs{"G\$main_"}) + defined($text_symbol_ofs{"G\$_start_"}));
   die "$0: fatal: too many entry points (main functions)\n" if $entry_count > 1;
@@ -756,7 +775,7 @@ call__fullprog_end:  ; Make fullprog_code without fullprog_end fail.
 times -(((bss_end-bss_start)+(data_end-data_start)+(code_end-code_start+0x100)+3)>>16) db 0
 );
     }
-    print $exef qq(bits 16\ncpu $NASMCPU\n);
+    print $exef qq(bits 16\ncpu $nasm_cpu\n);
     print $exef qq($fullprog_code\n);
     print $exef qq(db 0x16  ; push ss\ndb 0x1f  ; pop ds\n) if $is_exe and $is_data_used;
     print $exef qq(cld\n) if $need_clear_df;
@@ -853,8 +872,10 @@ times -(((bss_end-bss_start)+(data_end-data_start)+(code_end-code_start+0x100)+3
       print $exef $exe_header;
     }
     substr($clear_bss, 4, 2) = pack("v", $segment_vofs{_BSS}) if length($clear_bss) >= 6;
-    substr($call_main, $call_main_ofs, 2) = pack("v", $symbol_vofs{$call_main_symbol} - ($call_main_ofs + 2 + $segment_vofs{call_main})) if
-        defined($call_main_ofs);
+    if (defined $call_main_ofs) {
+      die "$0: assert: unknown entry point: $call_main_symbol\n" if !defined($symbol_vofs{$call_main_symbol});
+      substr($call_main, $call_main_ofs, 2) = pack("v", $symbol_vofs{$call_main_symbol} - ($call_main_ofs + 2 + $segment_vofs{call_main}));
+    }
     # Tiny version of
     # https://github.com/open-watcom/open-watcom-v2/blob/master/bld/clib/startup/a/cstrt086.asm
     print $exef $init_regs, $clear_bss, $call_main;
