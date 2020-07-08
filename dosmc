@@ -211,9 +211,91 @@ sub get_8086_exit_code($$) {
   undef
 }
 
-sub maybe_contains_8086_str($) {
-  # !! TODO(pts): Add proper 8080 disassembler for detecting these instructions.
-  $_[0] =~ y@\x6C-\x6F\xA4-\xA7\xAA-\xAF@@  # 8086 string instructions.
+# Regexp matching 80286 instructions, including 80287, but excluding
+# protected mode. Prefixes are considered separate instructions.
+my $INST_80286_RE = q(\x26\x2E\x36\x3E\x9B\xF0\xF2\xF3]|[\x06\x07\x0E\x16\x17\x1E\x1F\x27\x2F\x37\x3F-\x61\x6C-\x6F\x90-\x99\x9C-\x9F\xA4-\xA7\xAA-\xAF\xC3\xC9\xCB\xCC\xCE\xCF\xD6\xD7\xEC-\xEF\xF1\xF4\xF5\xF8-\xFD]|[\x04\x0C\x14\x1C\x24\x2C\x34\x3C\x6A\x70-\x7F\xA8\xB0-\xB7\xCD\xD4\xD5\xE0-\xE7\xEB][\x00-\xFF]|[\x62\x8D\xC4\xC5\xDA][\x00-\x05\x07-\x0D\x0F-\x15\x17-\x1D\x1F-\x25\x27-\x2D\x2F-\x35\x37-\x3D\x3F]|[\x00-\x03\x08-\x0B\x10-\x13\x18-\x1B\x20-\x23\x28-\x2B\x30-\x33\x38-\x3B\x84-\x8C\x8E\xD8][\x00-\x05\x07-\x0D\x0F-\x15\x17-\x1D\x1F-\x25\x27-\x2D\x2F-\x35\x37-\x3D\x3F\xC0-\xFF]|\xDE[\x00-\x05\x07-\x0D\x0F-\x15\x17-\x1D\x1F-\x25\x27-\x2D\x2F-\x35\x37-\x3D\x3F\xC0-\xCF\xD9\xE0-\xFF]|\xDC[\x00-\x05\x07-\x0D\x0F-\x15\x17-\x1D\x1F-\x25\x27-\x2D\x2F-\x35\x37-\x3D\x3F\xC0-\xCF\xE0-\xFF]|\xFF[\x00-\x05\x07-\x0D\x0F-\x15\x17-\x1D\x1F-\x25\x27-\x2D\x2F-\x35\x37\xC0-\xD7\xE0-\xE7\xF0-\xF7]|[\xD0-\xD3][\x00-\x05\x07-\x0D\x0F-\x15\x17-\x1D\x1F-\x25\x27-\x2D\x2F\x38-\x3D\x3F\xC0-\xEF\xF8-\xFF]|\xFE[\x00-\x05\x07-\x0D\x0F\xC0-\xCF]|\xD9[\x00-\x05\x07\x10-\x15\x17-\x1D\x1F-\x25\x27-\x2D\x2F-\x35\x37-\x3D\x3F\xC0-\xD0\xE0\xE1\xE4\xE5\xE8-\xEE\xF0-\xF4\xF6-\xFA\xFC\xFD]|\xDF[\x00-\x05\x07\x10-\x15\x17-\x1D\x1F-\x25\x27-\x2D\x2F-\x35\x37-\x3D\x3F\xC0-\xC7\xE0]|\xDD[\x00-\x05\x07\x10-\x15\x17-\x1D\x1F-\x25\x27\x30-\x35\x37-\x3D\x3F\xC0-\xC7\xD0-\xDF]|\xDB[\x00-\x05\x07\x10-\x15\x17-\x1D\x1F\x28-\x2D\x2F\x38-\x3D\x3F\xE0-\xE3]|\x8F[\x00-\x05\x07\xC0-\xC7]|\x0F[\x0B\xFF]|[\xF6\xF7][\x10-\x15\x17-\x1D\x1F-\x25\x27-\x2D\x2F-\x35\x37-\x3D\x3F\xD0-\xFF]|[\x05\x0D\x15\x1D\x25\x2D\x35\x3D\x68\xA0-\xA3\xA9\xB8-\xBF\xC2\xCA\xE8\xE9][\x00-\xFF]{2}|[\x6B\x80\x83][\x00-\x05\x07-\x0D\x0F-\x15\x17-\x1D\x1F-\x25\x27-\x2D\x2F-\x35\x37-\x3D\x3F\xC0-\xFF][\x00-\xFF]|[\xC0\xC1][\x00-\x05\x07-\x0D\x0F-\x15\x17-\x1D\x1F-\x25\x27-\x2D\x2F\x38-\x3D\x3F\xC0-\xEF\xF8-\xFF][\x00-\xFF]|\xF6[\x00-\x05\x07\x50-\x7F\xC0-\xC7][\x00-\xFF]|\xC6[\x00-\x05\x07\xC0-\xC7][\x00-\xFF]|\x8F[\x40-\x47][\x00-\xFF]|\xFE[\x40-\x4F][\x00-\xFF]|\xFF[\x40-\x77][\x00-\xFF]|[\x00-\x03\x08-\x0B\x10-\x13\x18-\x1B\x20-\x23\x28-\x2B\x30-\x33\x38-\x3B\x62\x84-\x8E\xC4\xC5\xD8\xDA\xDC\xDE][\x40-\x7F][\x00-\xFF]|[\xD0-\xD3][\x40-\x6F\x78-\x7F][\x00-\xFF]|[\xD9\xDF][\x40-\x47\x50-\x7F][\x00-\xFF]|\xDD[\x40-\x47\x50-\x67\x70-\x7F][\x00-\xFF]|\xDB[\x40-\x47\x50-\x5F\x68-\x6F\x78-\x7F][\x00-\xFF]|\xF7[\x50-\x7F][\x00-\xFF]|\xC8[\x00-\xFF]{3}|[\x69\x81][\x00-\x05\x07-\x0D\x0F-\x15\x17-\x1D\x1F-\x25\x27-\x2D\x2F-\x35\x37-\x3D\x3F\xC0-\xFF][\x00-\xFF]{2}|\xF7[\x00-\x05\x07\x16\x1E\x26\x2E\x36\x3E\x90-\xC7][\x00-\xFF]{2}|\xC7[\x00-\x05\x07\xC0-\xC7][\x00-\xFF]{2}|[\x00-\x03\x08-\x0B\x10-\x13\x18-\x1B\x20-\x23\x28-\x2B\x30-\x33\x38-\x3B\x62\x84-\x8E\xC4\xC5\xD8\xDA\xDC\xDE][\x06\x0E\x16\x1E\x26\x2E\x36\x3E\x80-\xBF][\x00-\xFF]{2}|\xFF[\x06\x0E\x16\x1E\x26\x2E\x36\x80-\xB7][\x00-\xFF]{2}|[\xD0-\xD3][\x06\x0E\x16\x1E\x26\x2E\x3E\x80-\xAF\xB8-\xBF][\x00-\xFF]{2}|\xFE[\x06\x0E\x80-\x8F][\x00-\xFF]{2}|[\xD9\xDF][\x06\x16\x1E\x26\x2E\x36\x3E\x80-\x87\x90-\xBF][\x00-\xFF]{2}|\xDD[\x06\x16\x1E\x26\x36\x3E\x80-\x87\x90-\xA7\xB0-\xBF][\x00-\xFF]{2}|\xDB[\x06\x16\x1E\x2E\x3E\x80-\x87\x90-\x9F\xA8-\xAF\xB8-\xBF][\x00-\xFF]{2}|\x8F[\x06\x80-\x87][\x00-\xFF]{2}|\xF6[\x16\x1E\x26\x2E\x36\x3E\x40-\x47\x90-\xBF][\x00-\xFF]{2}|\xC6[\x40-\x47][\x00-\xFF]{2}|[\x6B\x80\x83][\x40-\x7F][\x00-\xFF]{2}|[\xC0\xC1][\x40-\x6F\x78-\x7F][\x00-\xFF]{2}|\x0F[\x78\x79][\x00-\xFF]{2}|[\x9A\xEA][\x00-\xFF]{4}|[\x6B\x80\x83][\x06\x0E\x16\x1E\x26\x2E\x36\x3E\x80-\xBF][\x00-\xFF]{3}|[\xC0\xC1][\x06\x0E\x16\x1E\x26\x2E\x3E\x80-\xAF\xB8-\xBF][\x00-\xFF]{3}|[\xC6\xF6][\x06\x80-\x87][\x00-\xFF]{3}|[\xC7\xF7][\x40-\x47][\x00-\xFF]{3}|[\x69\x81][\x40-\x7F][\x00-\xFF]{3}|\x0F[\x78\x79][\x00-\xFF]{3}|[\x69\x81][\x06\x0E\x16\x1E\x26\x2E\x36\x3E\x80-\xBF][\x00-\xFF]{4}|[\xC7\xF7][\x06\x80-\x87][\x00-\xFF]{4});
+# Regexp maching a 8086 string instruction.
+my $STR_INST_80286_RE = q([\x6C-\x6F\xA4-\xA7\xAA-\xAF]);
+
+# Checks the following (for simplicity):
+#
+# * All relative relocations have a 0 base.
+# * $data is a concatenation of 80286 instructions, including 80287
+#   floating point instructions, but excluding protected mode
+#   instructions. (We check that there are no unknown opcodes or
+#   i386+-only opcodes.)
+# * There are are no split offsets in the middle of an
+#   instruction. Splits are at labels (@$symbolsr) and after relative
+#   relocations.
+# * There are no relative jump/call targets outside the range of $data
+#   (jumping right after $data is OK).
+# * There are no relative jump/call targets in the middle of an instruction.
+#
+# Returns "" for simple code without string instructions, 0 for simple code
+# with string instructions, a message explaining the complicatedness
+# otherwise.
+sub is_complicated_8086_code($$$) {
+  my($data, $fixupr, $symbolsr) = @_;
+  my $size = length($data);
+  # 1-byte relative jumps: [\x70-\x7F\xE3\xEB].
+  # 2-byte relative jumps and calls: [\xE8\xE9]..
+  my @splits;
+  for my $fixup (@$fixupr) {
+    my($endofs, $ofs, $ltypem, $symbol) = @$fixup;
+    return "relative fixup with nonzero base" if $ltypem < 0 and substr($data, $ofs, 2) ne "\0\0";
+    push @splits, $endofs if $ltypem < 0;
+  }
+  push @splits, map { $_->[0] } @$symbolsr;
+  push @splits, $size;  # Sentinel.
+  @splits = sort { $a <=> $b } @splits;
+  my $si = 0;
+  pos($data) = 0;
+  my @relative_splits;
+  my $result = "";
+  while ($data =~ m@\G(
+      [\x70-\x7F\xE3\xEB]([\x00-\xFF]) |  # 1-byte replative jumps ($2).
+      [\xE8\xE9]([\x00-\xFF]{2}) |  # 2-byte replative jump/call ($3).
+      ($STR_INST_80286_RE) |  # 80286 string instruction ($4).
+      $INST_80286_RE)@gcxo) {
+    my $endpos = pos($data);
+    while ($endpos > $splits[$si]) {
+      #print STDERR "warning: split instruction: $pos...$endpos [$si]=$splits[$si]\n" if $pos != $splits[$si];
+      return "split instruction" if $endpos - length($1) != $splits[$si];
+      ++$si;
+    }
+    if (defined($2) or defined($3)) {  # 1-byte relative jump.
+      my $target;
+      if (defined($2)) {
+        $target = $endpos + unpack("c", $2);
+      } else {
+        $target = unpack("v", $3);
+        $target = $endpos + $target - (($target & 0x8000) << 1);
+      }
+      if ($target != $endpos) {  # Shortcut, this would always succeed.
+        return "relative jump/call target out of range" if $target < 0 or $target > $size;
+        push @relative_splits, $target;
+      }
+    } elsif (defined($4)) {
+      $result = 0;  # String instruction detected.
+    }
+  }
+  return "unknown instruction" if pos($data) != $size;
+  if (@relative_splits) {
+    @splits = sort { $a <=> $b } @relative_splits;
+    push @splits, $size;  # Sentinel.
+    @relative_splits = ();  # Save memory.
+    $si = 0; pos($data) = 0;
+    while ($data =~ m@\G($INST_80286_RE)@gco) {
+      my $endpos = pos($data);
+      while ($endpos > $splits[$si]) {
+        #print STDERR "warning: split target instruction: $pos...$endpos [$si]=$splits[$si]\n" if $pos != $splits[$si];
+        return "split target instruction" if $endpos - length($1) != $splits[$si];
+        ++$si;
+      }
+    }
+    return "unknown instruction" if pos($data) != $size;  # Should happen above, not here.
+  }
+  $result
 }
 
 my @SEGMENT_ORDER = qw(_TEXT CONST CONST2 _DATA _BSS);  # Constant, OpenWatcom wcc.
@@ -279,7 +361,8 @@ sub link_executable($$@) {
   my %symbol_ofs;   # $symbol => $ofs.
   my %segment_symbols = map { $_ => [] } @SEGMENT_ORDER;  # $segment_name => [[$ofs, $symbol], ...].
   my @extdef = ("-ED");
-  my %fixupp = map { $_ => [] } @SEGMENT_ORDER;  # $segment_name => [[$endofs, $ltypem, $label], ...].
+  my %fixupp = map { $_ => [] } @SEGMENT_ORDER;  # $segment_name => [[$endofs, $ofs, $ltypem, $symbol], ...].
+  my $has_string_instructions = 0;
   my($last_segment_name, $last_ofs);
   while (1) {
     my $data;
@@ -425,6 +508,13 @@ sub link_executable($$@) {
     }
     $last_segment_name = $last_ofs = undef if $type != 0xa0 and $type != 0xa1 and $type != 0x9c;
   }
+  # This should be done for each input .obj files.
+  my $code_type = is_complicated_8086_code($ledata{_TEXT}, $fixupp{_TEXT}, $segment_symbols{_TEXT});
+  if ($code_type) {  # Complicated.
+    $has_string_instructions = 1 if $ledata{_TEXT} =~ m@$STR_INST_80286_RE@o;  # Conservative.
+  } else {
+    $has_string_instructions = 1 if length($code_type);
+  }
 
   for my $segment_name (@SEGMENT_ORDER) {
     # Typically $segment_sizes{_BSS} is missing, put it back.
@@ -474,7 +564,7 @@ sub link_executable($$@) {
   my $do_clear_bss = $segment_sizes{_BSS} + ($need_clear_ax << 1) > 14;  # 14 == length($clear_bss_full).
   # _DATA comes before _BSS in @SEGMENT_ORDER, move all (\0) bytes from _BSS to _DATA.
   if (!$do_clear_bss) { $ledata{_DATA} .= "\0" x $segment_sizes{_BSS}; $segment_sizes{_DATA} += $segment_sizes{_BSS}; $segment_sizes{_BSS} = 0; }
-  my $need_clear_df = ($do_clear_bss or (!defined($exit_code) and maybe_contains_8086_str($ledata{_TEXT})));
+  my $need_clear_df = ($do_clear_bss or $has_string_instructions);
   for my $segment_name (@SEGMENT_ORDER) {
     die "$0: assert: segment size mismatch for $segment_name\n" if
         length($ledata{$segment_name}) != ($segment_name eq "_BSS" ? 0 : $segment_sizes{$segment_name});
@@ -672,6 +762,7 @@ times -(((bss_end-bss_start)+(data_end-data_start)+(code_end-code_start+0x100)+3
         die "$0: assert: bad endofs in fixup\n" if $endofs > length($data);
         die "$0: assert: unknown symbol in fixup: $symbol\n" if !defined($symbol_vofs{$symbol});
         my $svofs = $symbol_vofs{$symbol} + unpack("v", substr($data, $ofs, 2));
+        #printf STDERR "info: fixup \@0x%04x base=0x%04x symbol=%s add=0x%04x is_rel=%d\n", $ofs, unpack("v", substr($data, $ofs, 2)), $symbol, $symbol_vofs{$symbol}, ($ltypem < 0 or 0);
         $svofs -= $endofs + $this_segment_vofs if $ltypem < 0;
         substr($data, $ofs, 2) = pack("v", $svofs);
       }
