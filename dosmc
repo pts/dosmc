@@ -22,6 +22,7 @@ eval '(exit $?0)' && eval 'PERL_BADLANG=x;PATH="$PATH:.";export PERL_BADLANG\
 # !! Optimize away everything if the first instruction by the entry point is `ret' or exit.
 # !! Optimize away unused basic blocks from .text.
 # !! Remove `push dx' and `pop dx' (and other register operations) from examples/hello.com.
+# !! Recognize the entry point (implicit ..start) in MODEND.
 #
 # !! Cleanup flag to remove .tmp files.
 # !! Allow .obj files from NASM, give source example for section.
@@ -365,6 +366,7 @@ sub link_executable($$@) {
   my %fixupp = map { $_ => [] } @SEGMENT_ORDER;  # $segment_name => [[$endofs, $ofs, $ltypem, $symbol], ...].
   my $has_string_instructions = 0;
   my($last_segment_name, $last_ofs);
+  my $obj_symbol_prefix = "O1\$";
   while (1) {
     my $data;
     die "$0: fatal: EOF in obj record header\n" if (read($f, $data, 3) or 0) != 3;
@@ -412,17 +414,22 @@ sub link_executable($$@) {
     } elsif ($type == 0xa1) {  # Long LEDATA.
       die "$0: fatal: long LEDATA not supported\n";
     } elsif ($type == 0x90 or $type == 0xb6) {  # PUBDEF or LPUBDEF(static).
-      die "$0: fatal: PUBDEF too short" if $size < 2;
+      my $recname = $type == 0xb6 ? "LPUBDEF" : "PUBDEF";
+      # $ as a prefix would make nasm to treat it as a symbol name, e.g. $ax
+      # as ax. A $ in the middle of the symbol name ias also good to force
+      # it to be a symbol in nasm.
+      my $symbol_prefix = $type == 0xb6 ? $obj_symbol_prefix : "G\$";
+      die "$0: fatal: $recname too short" if $size < 2;
       my $segment_idx = vec($data, 1, 8);
       die "$0: fatal: unknown segment: $segment_idx\n" if $segment_idx >= @segment_names;
       my $segment_name = $segment_names[$segment_idx];
       for (my $i = 2; $i < $size; $i += 3) {
         my $fsize = vec($data, $i++, 8);
-        die "$0: fatal: EOF in PUBDEF entry\n" if $i + $fsize + 3 > $size;
-        my $symbol = substr($data, $i, $fsize);
+        die "$0: fatal: EOF in $recname entry\n" if $i + $fsize + 3 > $size;
+        my $symbol = $symbol_prefix . substr($data, $i, $fsize);
         $i += $fsize;
         my($ofs, $type) = unpack("vC", substr($data, $i, 3));
-        #print STDERR "info: PUBDEF $segment_name $symbol $ofs $type\n";
+        #print STDERR "info: $recname $segment_name $symbol $ofs $type\n";
         # Also because we do not support parsing 2-byte type index.
         die "$0: fatal: bad symbol type: symbol=$symbol type=$type\n" if $type != 0;
         die "$0: fatal: duplicate symbol: $symbol\n" if exists($symbol_ofs{$symbol});
@@ -434,15 +441,19 @@ sub link_executable($$@) {
     } elsif ($type == 0xb7) {  # Long LPUBDEF.
       die "$0: fatal: long LPUBDEF not supported\n";
     } elsif ($type == 0x8c or $type == 0xb4) {  # EXTDEF or LEXTDEF(static).
+      my $recname = $type == 0xb4 ? "LEXTDEF" : "EXTDEF";
+      # $ is for nasm to treat it as a symbol name, e.g. $ax as ax.
+      my $symbol_prefix = $type == 0xb4 ? $obj_symbol_prefix : "G\$";
       for (my $i = 0; $i < $size; ) {
         my $fsize = vec($data, $i++, 8);
-        die "$0: fatal: EOF in EXTDEF entry\n" if $i + $fsize + 1 > $size;
-        my $symbol = substr($data, $i, $fsize);
+        die "$0: fatal: EOF in $recname entry\n" if $i + $fsize + 1 > $size;
+        # $ is for nasm to take the symbol as an identifier.
+        my $symbol = $symbol_prefix . substr($data, $i, $fsize);
         $i += $fsize;
         my $type = unpack("C", substr($data, $i++, 1));
         # Also because we do not support parsing 2-byte type index.
-        die "$0: fatal: unsupported EXTDEF type: symbol=$symbol type=$type\n" if $type != 0;
-        #print STDERR "info: EXTDEF $symbol $type\n";
+        die "$0: fatal: unsupported $recname type: symbol=$symbol type=$type\n" if $type != 0;
+        #print STDERR "info: $recname $symbol $type\n";
         push @extdef, $symbol;
       }
     } elsif ($type == 0xb5) {  # Long LEXTDEF.
@@ -531,15 +542,15 @@ sub link_executable($$@) {
     delete $undefined_symbols{$symbol};
   }
   # Helpfully added by wcc if there is main(...) with nonzero arguments.
-  my $do_use_argc = exists($undefined_symbols{__argc});
-  delete $undefined_symbols{__argc};
-  delete $undefined_symbols{_cstart_};
-  die "$0: fatal: missing symbol: _small_code_\n" if !exists($undefined_symbols{_small_code_});
-  delete $undefined_symbols{_small_code_};
+  my $do_use_argc = exists($undefined_symbols{"G\$__argc"});
+  delete $undefined_symbols{"G\$__argc"};
+  delete $undefined_symbols{"G\$_cstart_"};
+  die "$0: fatal: missing symbol: G\$_small_code_\n" if !exists($undefined_symbols{"G\$_small_code_"});
+  delete $undefined_symbols{"G\$_small_code_"};
   my @undefined_symbols = sort keys %undefined_symbols;
   die "$0: fatal: undefined symbols: @undefined_symbols\n" if @undefined_symbols;
 
-  my $entry_count = (defined($symbol_ofs{main_}) + defined($symbol_ofs{_start_}));
+  my $entry_count = (defined($symbol_ofs{"G\$main_"}) + defined($symbol_ofs{"G\$_start_"}));
   die "$0: fatal: too many entry points (main functions)\n" if $entry_count > 1;
   die "$0: fatal: missing entry point (main function)\n" if $entry_count == 0;
 
@@ -548,8 +559,8 @@ sub link_executable($$@) {
     for my $segment_name (@SEGMENT_ORDER) {
       $ledata{$segment_name} = ""; $segment_sizes{$segment_name} = 0; $fixupp{$segment_name} = []; $segment_symbols{$segment_name} = [];
     }
-    delete $symbol_ofs{main_};
-    $symbol_ofs{_start_} = 0;
+    delete $symbol_ofs{"G\$main_"};
+    $symbol_ofs{"G\$_start_"} = 0;
     push @{$segment_symbols{_TEXT}}, [0, "_start_"];
     if ($is_exe or $exit_code) {
       $ledata{_TEXT} = pack("aCa3", "\xB8", $exit_code, "\x4C\xCD\x21");  # mov ax, 0x4c??;; int 0x21
@@ -561,7 +572,7 @@ sub link_executable($$@) {
 
   my $does_entry_point_return = !defined($exit_code);  # TODO(pts): Smarter detection.
   my $is_data_used = !defined($exit_code);
-  my $need_clear_ax = (defined($symbol_ofs{main_}) and $do_use_argc);
+  my $need_clear_ax = (defined($symbol_ofs{"G\$main_"}) and $do_use_argc);
   my $do_clear_bss = $segment_sizes{_BSS} + ($need_clear_ax << 1) > 14;  # 14 == length($clear_bss_full).
   # _DATA comes before _BSS in @SEGMENT_ORDER, move all (\0) bytes from _BSS to _DATA.
   if (!$do_clear_bss) { $ledata{_DATA} .= "\0" x $segment_sizes{_BSS}; $segment_sizes{_DATA} += $segment_sizes{_BSS}; $segment_sizes{_BSS} = 0; }
@@ -662,20 +673,20 @@ times -(((bss_end-bss_start)+(data_end-data_start)+(code_end-code_start+0x100)+3
     } elsif ($need_clear_ax) {
       print $exef qq(db 0x31, 0xC0  ; xor ax, ax\n  ; argc=0);
     }
-    if (defined($symbol_ofs{_start_})) {  # TODO(pts): Keep these consistent with emit_executable.
+    if (defined($symbol_ofs{"G\$_start_"})) {  # TODO(pts): Keep these consistent with emit_executable.
       if ($is_exe and $does_entry_point_return) {
-        print $exef qq(db 0xE8\ndw 0x0000+_start_-\(\$+2\)  ; call _start_\n);
+        print $exef qq(db 0xE8\ndw 0x0000+G\$_start_-\(\$+2\)  ; call G\$_start_\n);
         print $exef qq(db 0xB8, 0, 0x4C, 0xCD, 0x21  ; mov ax, 0x4c00;; int 0x21  ; EXIT with code 0.\n);
-      } elsif ($symbol_ofs{_start_} == 0) {  # Code starts with _start.
+      } elsif ($symbol_ofs{"G\$_start_"} == 0) {  # Code starts with _start.
       } else {
-        print $exef qq(db 0xE9\ndw 0x0000+_start_-\(\$+2\)  ; jmp strict word _start_\n);
+        print $exef qq(db 0xE9\ndw 0x0000+G\#_start_-\(\$+2\)  ; jmp strict word G\$_start_\n);
       }
-    } elsif (defined($symbol_ofs{main_}) and $do_use_argc) {
+    } elsif (defined($symbol_ofs{"G\$main_"}) and $do_use_argc) {
       # OpenWatcom wcc does not support non-constant initializers, so we can call
       # main now.
-      print $exef qq(xor dx, dx\ncall main_\nmov ah, 0x4c  ; dx: argv=NULL; EXIT, exit code in al\nint 0x21\n);
-    } elsif (defined($symbol_ofs{main_})) {
-      print $exef qq(call main_\nmov ah, 0x4c  ; EXIT, exit code in al\nint 0x21\n);
+      print $exef qq(xor dx, dx\ncall G\$main_\nmov ah, 0x4c  ; dx: argv=NULL; EXIT, exit code in al\nint 0x21\n);
+    } elsif (defined($symbol_ofs{"G\$main_"})) {
+      print $exef qq(call G\$main_\nmov ah, 0x4c  ; EXIT, exit code in al\nint 0x21\n);
     }
     for my $segment_name (@SEGMENT_ORDER) {
       print $exef qq($fullprog_data\n) if $segment_name eq "CONST";  # Double-quoted string literals.
@@ -692,28 +703,28 @@ times -(((bss_end-bss_start)+(data_end-data_start)+(code_end-code_start+0x100)+3
         $need_clear_ax ? "\x31\xC0" : "";  # xor ax, ax  ; argc=0.
     # $call_main is affected by fixups below.
     my($call_main, $call_main_symbol, $call_main_ofs);
-    if (defined($symbol_ofs{_start_})) {
+    if (defined($symbol_ofs{"G\$_start_"})) {
       if ($is_exe and $does_entry_point_return) {
         # call _start_;; mov ax, 0x4c00;; int 0x21  ; EXIT with code 0.
         $call_main = pack("ava5", "\xE8", 0, "\xB8\x00\x4C\xCD\x21");
-        $call_main_symbol = "_start_"; $call_main_ofs = length($call_main) - 7;
-      } elsif ($symbol_ofs{_start_} == 0) {  # Code starts with _start.
+        $call_main_symbol = "G\$_start_"; $call_main_ofs = length($call_main) - 7;
+      } elsif ($symbol_ofs{"G\$_start_"} == 0) {  # Code starts with _start.
         $call_main = ""; $call_main_symbol = $call_main_ofs = undef;
       } else {
         # !! TODO(pts): Instead of the jmp, move the code of $clear_bss and $call_main just above _start.
         $call_main = pack("a1v", "\xE9", 0);  # jmp strict word _start_
-        $call_main_symbol = "_start_"; $call_main_ofs = length($call_main) - 2;
+        $call_main_symbol = "G\$_start_"; $call_main_ofs = length($call_main) - 2;
       }
-    } elsif (defined($symbol_ofs{main_}) and $do_use_argc) {
+    } elsif (defined($symbol_ofs{"G\$main_"}) and $do_use_argc) {
       # OpenWatcom wcc does not support non-constant initializers, so we can call
       # main now.
-      # xor dx, dx;; call main_;; mov ah, 0x4c;; int 0x21  ; dx: argv=NULL; EXIT, exit code in al
+      # xor dx, dx;; call G$main_;; mov ah, 0x4c;; int 0x21  ; dx: argv=NULL; EXIT, exit code in al
       $call_main = pack("a3va4", "\x31\xD2\xE8", 0, "\xB4\x4C\xCD\x21");
-      $call_main_symbol = "main_"; $call_main_ofs = length($call_main) - 6;
-    } elsif (defined($symbol_ofs{main_})) {
+      $call_main_symbol = "G\$main_"; $call_main_ofs = length($call_main) - 6;
+    } elsif (defined($symbol_ofs{"G\$main_"})) {
       # call main_;; mov ah, 0x4c;; int 0x21  ; EXIT, exit code in al
       $call_main = pack("a1va4", "\xE8", 0, "\xB4\x4C\xCD\x21");
-      $call_main_symbol = "main_"; $call_main_ofs = length($call_main) - 6;
+      $call_main_symbol = "G\$main_"; $call_main_ofs = length($call_main) - 6;
     }
     my $vofs = ($is_exe ? 8 : 0x100) + length($init_regs) + length($clear_bss);
     my %segment_vofs;
