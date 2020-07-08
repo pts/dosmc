@@ -354,8 +354,10 @@ sub emit_nasm_segment($$$$$$) {
       print $exef "$ASM_DATA_OP{$size} $base+$symbol$rel\n";
       $i = $endofs;
     }
-    my $line = unpack("H*", substr($data, $i, $j - $i)); $line =~ s@(..)(?=.)@$1, 0x@sg; print $exef "db 0x$line\n";
-    $i = $j;
+    if ($i < $j) {
+      my $line = unpack("H*", substr($data, $i, $j - $i)); $line =~ s@(..)(?=.)@$1, 0x@sg; print $exef "db 0x$line\n";
+      $i = $j;
+    }
   };
   while ($si < @symbols) {
     my $j = $symbols[$si][0];
