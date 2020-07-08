@@ -92,6 +92,19 @@ Program entry points for dosmc (choose any):
 Global variables without initial value (e.g. `int myvar;') (in segment _BSS)
 are auto-initialized to 0, stack isn't initialized.
 
+What is the minimum executable file size dosmc can produce?
+
+* For .com output, the theoretical minimum is 1 byte (`ret' instruction), and
+  dosmc produces it for examples/exit0.c and examples/empty_start.c.
+
+* For .exe output, the theoretical minimum is 24 bytes. The .exe header is
+  28 bytes, but the last 4 bytes are not used if there aren't any
+  relocations. The shortest 8086 code to exit (for .exe files) is 5 bytes,
+  so the minimum is 29 bytes, and dosmc produces it for examples/exit0.c,
+  examples/exit42.c and examples/empty_start.c. It's possible to iput the 5
+  bytes of code to the middle of the 24-byte .exe header, but dosmc
+  doesn't do that.
+
 Notes about maximum memory usage of DOS programs:
 
 * 16-bit DOS programs can address up to 1 MiB memory (in real mode, using

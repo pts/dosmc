@@ -284,7 +284,7 @@ LINKER_CODE='
     # Typically $segment_sizes{_BSS} is missing, put it back.
     $segment_sizes{$segment_name} = 0 if !exists($segment_sizes{$segment_name});
     my $size = $segment_name eq "_BSS" ? 0 : $segment_sizes{$segment_name};
-    die "$0: fatal: segment size mismatch for $segment_name\n" if
+    die "$0: assert: segment size mismatch for $segment_name\n" if
         length($ledata{$segment_name}) != $size;
   }
 
@@ -306,20 +306,59 @@ LINKER_CODE='
   die "$0: fatal: too many entry points (main functions)\n" if $entry_count > 1;
   die "$0: fatal: missing entry point (main function)\n" if $entry_count == 0;
 
+  # Checks if the entry point contains an instructions to exit immediately,
+  # return exit code (0..255) if found, otherwise returns undef.
+  sub get_8086_exit_code() {
+    pos($ledata{_TEXT}) = defined($symbol_ofs{_start_}) ? $symbol_ofs{_start_} : $symbol_ofs{main_};
+    return 0 if $ledata{_TEXT} =~ /\G(?:\x31\xC0)?\xC3/gcs;  # xor ax, ax;; ret
+    $ledata{_TEXT} =~ /\G[\x06\x0E\x16\x1E\x50-\x57]+/gcs;  # Skip some register pushes.
+    # TODO(pts): Add skipping of (sub sp, ...) for local variables.
+    return unpack("C", $1) if
+        $ledata{_TEXT} =~ /\G\xB8(.)\x4C\xCD\x21/gcs or  # mov ax, 0x4c??;; int 0x21
+        $ledata{_TEXT} =~ /\G\xB4\x4C\xB0(.)\xCD\x21/gcs or  # mov ah, 0x4c;; mov al, 0x??;; int 0x21
+        $ledata{_TEXT} =~ /\G\xB0(.)\xB4\x4C\xCD\x21/gcs or  # mov al, 0x??;; mov ah, 0x4c;; int 0x21
+        $ledata{_TEXT} =~ /\G\xB8(.).\xC3/gcs or  # mov ax, 0x--??;; ret
+        $ledata{_TEXT} =~ /\G\xB0(.)\xC3/gcs;  # mov al, 0x??;; ret
+    undef
+  }
+
+  my $exit_code = get_8086_exit_code();
+  if (defined($exit_code)) {  # Shortcut if the program immediately exits.
+    for my $segment_name (@SEGMENT_ORDER) {
+      $ledata{$segment_name} = ""; $segment_sizes{$segment_name} = 0; $fixupp{$segment_name} = []; $segment_symbols{$segment_name} = [];
+    }
+    delete $symbol_ofs{main_};
+    $symbol_ofs{_start_} = 0;
+    push @{$segment_symbols{_TEXT}}, [0, "_start_"];
+    if ($is_exe or $exit_code) {
+      $ledata{_TEXT} = pack("aCa3", "\xB8", $exit_code, "\x4C\xCD\x21");  # mov ax, 0x4c??;; int 0x21
+    } else {
+      $ledata{_TEXT} = "\xC3";  # ret
+    }
+    $segment_sizes{_TEXT} = length($ledata{_TEXT});
+  }
+
   sub maybe_contains_8086_str($) {
-    # TODO(pts): Add proper 8080 disassembler for detecting these instructions.
+    # !! TODO(pts): Add proper 8080 disassembler for detecting these instructions.
     $_[0] =~ y@\x6C-\x6F\xA4-\xA7\xAA-\xAF@@  # 8086 string instructions.
   }
 
+  my $does_entry_point_return = !defined($exit_code);  # TODO(pts): Smarter detection.
+  my $is_data_used = !defined($exit_code);
   my $need_clear_ax = (defined($symbol_ofs{main_}) and $do_use_argc);
   my $do_clear_bss = $segment_sizes{_BSS} + ($need_clear_ax << 1) > 14;  # 14 == length($clear_bss_full).
   # _DATA comes before _BSS in @SEGMENT_ORDER, move all (\0) bytes from _BSS to _DATA.
   if (!$do_clear_bss) { $ledata{_DATA} .= "\0" x $segment_sizes{_BSS}; $segment_sizes{_DATA} += $segment_sizes{_BSS}; $segment_sizes{_BSS} = 0; }
-  my $need_clear_df = ($do_clear_bss or maybe_contains_8086_str($ledata{_TEXT}));
+  my $need_clear_df = ($do_clear_bss or (!defined($exit_code) and maybe_contains_8086_str($ledata{_TEXT})));
+  for my $segment_name (@SEGMENT_ORDER) {
+    die "$0: assert: segment size mismatch for $segment_name\n" if
+        length($ledata{$segment_name}) != ($segment_name eq "_BSS" ? 0 : $segment_sizes{$segment_name});
+  }
 
   sub emit_nasm_segment($) {
     my $segment_name = $_[0];
     my $size = $segment_sizes{$segment_name};
+    my $data = $ledata{$segment_name};
     print "OBJ_SEGMENT_${segment_name}_start:\n";
     print "OBJ_SEGMENT_${segment_name}_size equ $size\n";
 
@@ -328,7 +367,6 @@ LINKER_CODE='
     my $fixupr = $fixupp{$segment_name};  # Already sorted.
     my $fi = 0; my $si = 0; my $i = 0;
     my $is_bss = $segment_name eq "_BSS";
-    my $data = $ledata{$segment_name};
     my $chunk_sub = $segment_name eq "_BSS" ? sub { my $size = $_[0] - $i; print "resb $size\n"; $i = $_[0]; } : sub {
       my $j = $_[0];
       while ($fi < @$fixupr and $fixupr->[$fi][1] < $j) {  # Apply fixup.
@@ -383,8 +421,6 @@ dw 0  ; Code segment (cs) base.
 ; We reuse the final 4 bytes of the .exe header (dw relocation_table_ofs,
 ; overlay_number) for code.
 code_start:
-db 0x16  ; push ss
-db 0x1f  ; pop ds
 );
 $fullprog_data = q(
 code_end:
@@ -443,6 +479,7 @@ times -(((bss_end-bss_start)+(data_end-data_start)+(code_end-code_start+0x100)+3
     }
     print qq(bits 16\ncpu $NASMCPU\n);
     print qq($fullprog_code\n);
+    print qq(db 0x16  ; push ss\ndb 0x1f  ; pop ds\n) if $is_exe and $is_data_used;
     print qq(cld\n) if $need_clear_df;
     if ($do_clear_bss) {
       print qq(push es\npush ds\npop es\nmov di, bss_start\nmov cx, (stack-bss_start+1)>>1\nxor ax, ax\nrep stosw\npop es\n);  # clear_bss.
@@ -450,12 +487,12 @@ times -(((bss_end-bss_start)+(data_end-data_start)+(code_end-code_start+0x100)+3
       print qq(db 0x31, 0xC0  ; xor ax, ax\n  ; argc=0);
     }
     if (defined($symbol_ofs{_start_})) {  # TODO(pts): Keep these consistent with emit_executable.
-      if ($is_exe) {
+      if ($is_exe and $does_entry_point_return) {
         print qq(db 0xE8\ndw 0x0000+_start_-\(\$+2\)  ; call _start_\n);
         print qq(db 0xB8, 0, 0x4C, 0xCD, 0x21  ; mov ax, 0x4c00;; int 0x21  ; EXIT with code 0.\n);
       } elsif ($symbol_ofs{_start_} == 0) {  # Code starts with _start.
       } else {
-        print qq(db 0xE9\ndw 0x0000+_start_-\(\$+2\)  ; jmp strict dword _start_\n);
+        print qq(db 0xE9\ndw 0x0000+_start_-\(\$+2\)  ; jmp strict word _start_\n);
       }
     } elsif (defined($symbol_ofs{main_}) and $do_use_argc) {
       # OpenWatcom wcc does not support non-constant initializers, so we can call
@@ -476,7 +513,7 @@ times -(((bss_end-bss_start)+(data_end-data_start)+(code_end-code_start+0x100)+3
 
   sub emit_executable() {
     my $init_regs = "";
-    $init_regs .= "\x16\x1F" if $is_exe;  # push ss; pop ds
+    $init_regs .= "\x16\x1F" if $is_exe and $is_data_used;  # push ss; pop ds
     $init_regs .= "\xFC" if $need_clear_df;  # String instructions (e.g. movsb, stosw) need df=0 (cld).
     # push ds;; pop es;; mov di, bss_start;; mov cx, (stack-bss_start+1)>>1;; xor ax, ax;; rep stosw;; pop es
     my $clear_bss = $do_clear_bss ? pack("a4va1va5", "\x06\x1E\x07\xBF", 0, "\xB9", ($segment_sizes{_BSS} + 1) >> 1, "\x31\xC0\xF3\xAB\x07") :  # Affected by fixups below.
@@ -484,16 +521,15 @@ times -(((bss_end-bss_start)+(data_end-data_start)+(code_end-code_start+0x100)+3
     # $call_main is affected by fixups below.
     my($call_main, $call_main_symbol, $call_main_ofs);
     if (defined($symbol_ofs{_start_})) {
-      if ($is_exe) {
+      if ($is_exe and $does_entry_point_return) {
         # call _start_;; mov ax, 0x4c00;; int 0x21  ; EXIT with code 0.
         $call_main = pack("ava5", "\xE8", 0, "\xB8\x00\x4C\xCD\x21");
         $call_main_symbol = "_start_"; $call_main_ofs = length($call_main) - 7;
       } elsif ($symbol_ofs{_start_} == 0) {  # Code starts with _start.
         $call_main = ""; $call_main_symbol = $call_main_ofs = undef;
       } else {
-        # TODO(pts): Instead of the jmp, move the code of $clear_bss and $call_main just above _start.
-        # jmp strict word start_
-        $call_main = pack("a1v", "\xE9", 0);
+        # !! TODO(pts): Instead of the jmp, move the code of $clear_bss and $call_main just above _start.
+        $call_main = pack("a1v", "\xE9", 0);  # jmp strict word _start_
         $call_main_symbol = "_start_"; $call_main_ofs = length($call_main) - 2;
       }
     } elsif (defined($symbol_ofs{main_}) and $do_use_argc) {
