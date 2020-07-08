@@ -7,7 +7,9 @@
 #define NULL ((void *)0)  /* stdlib.h */
 #endif
 
-/* Writes a $-delimited string to stdout. */
+/* Writes a $-delimited string to stdout. You may want to create msg with
+ * STRING_WITHOUT_NUL to save 1 byte.
+ */
 static inline void _printmsgx(const char *msg);
 #pragma aux _printmsgx = \
 "mov ah, 9" /* WRITE_STDOUT */ \
@@ -28,6 +30,11 @@ parm [ es dx ] \
 modify [ ah ];
 
 #define _printmsgx_autosize(msg) ((sizeof((msg)+0) == sizeof(const char*)) ? _printmsgx((const char*)(int)msg) : _printmsgx_far(msg))
+
+/* Example usage:
+ * static const STRING_WITHOUT_NUL(msg, "Hello, World!\r\n$");
+ */
+#define STRING_WITHOUT_NUL(name, value) char name[sizeof(value) - 1] = value
 
 /* Writes single byte to stdout. Binary safe when redirected. */
 /* TODO(pts): Make it not inline. */

@@ -21,6 +21,7 @@ eval '(exit $?0)' && eval 'PERL_BADLANG=x;PATH="$PATH:.";export PERL_BADLANG\
 # !! Add disassembler to check that ds is not used in the .exe file, and optimize away `pop ds'. (Without a disassembler, even if _CONST, _CONST2 and _DATA are empty, pointers to local (on-stack) variables may be taken and they won't work.)
 # !! Optimize away everything if the first instruction by the entry point is `ret' or exit.
 # !! Optimize away unused basic blocks from .text.
+# !! Remove `push dx' and `pop dx' (and other register operations) from examples/hello.com.
 #
 # !! Cleanup flag to remove .tmp files.
 # !! Allow .obj files from NASM, give source example for section.

@@ -96,7 +96,6 @@ What is the minimum executable file size dosmc can produce?
 
 * For .com output, the theoretical minimum is 1 byte (`ret' instruction), and
   dosmc produces it for examples/exit0.c and examples/empty_start.c.
-
 * For .exe output, the theoretical minimum is 28 bytes, because DOSBox
   refuses to load an .exe (without an error message) if it's shorter than 28
   bytes. The .exe header is 28 bytes, but the last 4 bytes are not used if
@@ -106,6 +105,18 @@ What is the minimum executable file size dosmc can produce?
   possible to put the 5 bytes of code to the middle of the 28-byte .exe
   header at the expense of using 317 KiB of conventional memory, but dosmc
   doesn't waste that much.
+
+How much overhead does dosmc add?
+
+* For .com output, the overhead can be as low as 0 bytes, see
+  examples/exit0.c, examples/exit42.c, examples/empty_start.c,
+  examples/hello.c . For examples/hello.c, the output .com file is just 26
+  bytes, 2 bytes more (because of `push dx' and `pop dx') than
+  hand-optimized assembly.
+* For .exe output, the overhead can be as low as 34 bytes (including the
+  mandatory .exe header of 28 bytes). By some additional code mangling at
+  link time to avoid the `call _start_' and the `ret', the 34 bytes could be
+  decreased to 30 bytes.
 
 Notes about maximum memory usage of DOS programs:
 
