@@ -97,13 +97,15 @@ What is the minimum executable file size dosmc can produce?
 * For .com output, the theoretical minimum is 1 byte (`ret' instruction), and
   dosmc produces it for examples/exit0.c and examples/empty_start.c.
 
-* For .exe output, the theoretical minimum is 24 bytes. The .exe header is
-  28 bytes, but the last 4 bytes are not used if there aren't any
-  relocations. The shortest 8086 code to exit (for .exe files) is 5 bytes,
-  so the minimum is 29 bytes, and dosmc produces it for examples/exit0.c,
-  examples/exit42.c and examples/empty_start.c. It's possible to iput the 5
-  bytes of code to the middle of the 24-byte .exe header, but dosmc
-  doesn't do that.
+* For .exe output, the theoretical minimum is 28 bytes, because DOSBox
+  refuses to load an .exe (without an error message) if it's shorter than 28
+  bytes. The .exe header is 28 bytes, but the last 4 bytes are not used if
+  there aren't any relocations. The shortest 8086 code to exit (for .exe
+  files) is 5 bytes, so the minimum is 29 bytes, and dosmc produces it for
+  examples/exit0.c, examples/exit42.c and examples/empty_start.c. It's
+  possible to put the 5 bytes of code to the middle of the 28-byte .exe
+  header at the expense of using 317 KiB of conventional memory, but dosmc
+  doesn't waste that much.
 
 Notes about maximum memory usage of DOS programs:
 
