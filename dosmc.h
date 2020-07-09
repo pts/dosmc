@@ -9,6 +9,10 @@
 
 /* Writes a $-delimited string to stdout. You may want to create msg with
  * STRING_WITHOUT_NUL to save 1 byte.
+ *
+ * When writing to the console, \r\n is needed for a line break. In DOSBox,
+ * \n also works, but in FreeDOS 1.2, \n only moves down, not to the
+ * beginning to the next line.
  */
 static inline void _printmsgx(const char *msg);
 #pragma aux _printmsgx = \
