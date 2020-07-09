@@ -59,6 +59,7 @@ my $CPUF = "-0";
 my @sources;
 my @wcc_args;
 my $has_c_source = 0;
+my @defines;
 
 for my $arg (@ARGV) {
   if ($arg eq "--" or $arg eq "-" or !length($arg)) {
@@ -87,6 +88,8 @@ for my $arg (@ARGV) {
   } elsif ($arg eq "-ecw") {  # We support only the Watcom default calling convention (and name mangling).
   } elsif ($arg =~ m@\A-ec@) {
     die "$0: fatal: unsupported default calling convention: $arg\n";
+  } elsif ($arg =~ m@\A-[DU]@) {
+    push @defines, $arg;
   } elsif ($arg =~ m@\A-@) {
     push @wcc_args, $arg;
   } elsif ($arg =~ m@[.](c|nasm|obj)\Z(?!\n)@) {
@@ -186,9 +189,10 @@ sub run_command(@) {
 # -pl: -E
 # No need to set $WATCOM or to extend $PATH.
 # 202: symbol defined but not referenced (useful for static functions).
-my @d_args;
+my @d_args;  # Applies to wcc and nasm.
 push @d_args, "-D__DOSMC__";  # TODO(pts): Add these and also $CPUF for .nasm.
 push @d_args, "-D__DOSMC_COM__" if $EXT eq "com";
+push @d_args, @defines;
 my @wcc_cmd = ('wcc', @d_args);
 push @wcc_cmd, $Q if length($Q);
 push @wcc_cmd, $PLL if length($PLL);
@@ -219,7 +223,6 @@ for my $srcfn (@sources) {
     die "$0: fatal: cannot write to: $tmpfn\n" if !print($tmpf
         qq(bits 16\ncpu $nasm_cpu\n;uppercase\nsegment text\n%include "$srcfnq"\n));
     die "$0: fatal: cannot close: $tmpfn\n" if !close($tmpf);
-    push @nasm_cmd, "-o", $objfn, $tmpfn;
     if (run_command(@nasm_cmd)) {
       print STDERR "$0: fatal: nasm failed\n"; exit(3);
     }
