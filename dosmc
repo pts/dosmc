@@ -195,7 +195,7 @@ push @wcc_cmd, $PLL if length($PLL);
 push @wcc_cmd, "-bt=dos", "-ms", "-i=$MYDIR", "-s", "-os", "-W", "-w4", "-wx", "-we", "-wcd=202", $CPUF, "-fr", @wcc_args;
 my $wcc_cmd_size = @wcc_cmd;
 my $nasm_cpu = $CPUF eq "-0" ? "8086" : substr($CPUF, 1) . "86";
-my @nasm_cmd = ("nasm", @d_args, "-f", "obj", "--before", "cpu $nasm_cpu", "--before", "segment text");  # Default is `bits 16'.
+my @nasm_cmd = ("nasm", @d_args, "-O9", "-f", "obj", "-w+orphan-labels");  # Default is `bits 16'.
 my $nasm_cmd_size = @nasm_cmd;
 my @objfns;
 my $do_objfn_arg = ($PL eq "-cw" or $PL eq "-ce" or $PL eq "-cn" or $PL eq "-c");
@@ -208,7 +208,18 @@ for my $srcfn (@sources) {
   push @objfns, $objfn;
   if ($ext eq "nasm") {
     die "$0: fatal: $PL with .nasm source not supported: $srcfn\n" if !$do_objfn_arg;
-    push @nasm_cmd, "-o", $objfn, $srcfn;
+    # We predeclare something in $tmpfn. Only NASM >= 2.14 has the --before
+    # flag to avoid this.
+    my $tmpfn = "$srcbase.inc.tmp.nasm";
+    my $tmpf;
+    die "$0: fatal: cannot open for writing: $tmpfn\n" if !open($tmpf, ">", $tmpfn);
+    my $srcfnq = $srcfn;
+    $srcfnq =~ s@([\x00-\x1F\\\$"\x7F-\xFF])@ "\\x" . pack("H", $1) @ge;
+    # TODO(pts): Port to Win32 with \ in the filename.
+    die "$0: fatal: cannot write to: $tmpfn\n" if !print($tmpf
+        qq(bits 16\ncpu $nasm_cpu\n;uppercase\nsegment text\n%include "$srcfnq"\n));
+    die "$0: fatal: cannot close: $tmpfn\n" if !close($tmpf);
+    push @nasm_cmd, "-o", $objfn, $tmpfn;
     if (run_command(@nasm_cmd)) {
       print STDERR "$0: fatal: nasm failed\n"; exit(3);
     }
