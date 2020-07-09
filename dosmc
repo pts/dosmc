@@ -211,7 +211,7 @@ for my $srcfn (@sources) {
   my $objfn = defined($forced_objfn) ? $forced_objfn : $PL eq "-c" ? "$srcbase.obj" : "$srcbase.tmp.obj";
   push @objfns, $objfn;
   if ($ext eq "nasm") {
-    die "$0: fatal: $PL with .nasm source not supported: $srcfn\n" if !$do_objfn_arg;
+    die "$0: fatal: $PL with .nasm source not supported: $srcfn\n" if !$do_objfn_arg and $PL ne "-pl";
     # We predeclare something in $tmpfn. Only NASM >= 2.14 has the --before
     # flag to avoid this.
     my $tmpfn = "$srcbase.inc.tmp.nasm";
@@ -223,6 +223,11 @@ for my $srcfn (@sources) {
     die "$0: fatal: cannot write to: $tmpfn\n" if !print($tmpf
         qq(bits 16\ncpu $nasm_cpu\n;uppercase\nsegment text\n%include "$srcfnq"\n));
     die "$0: fatal: cannot close: $tmpfn\n" if !close($tmpf);
+    if ($PL eq "-pl") {
+      push @nasm_cmd, "-E", $tmpfn;
+    } else {
+      push @nasm_cmd, "-o", $objfn, $tmpfn;
+    }
     if (run_command(@nasm_cmd)) {
       print STDERR "$0: fatal: nasm failed\n"; exit(3);
     }
