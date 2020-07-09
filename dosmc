@@ -58,7 +58,6 @@ my $PL = "-ce";
 my $CPUF = "-0";
 my @sources;
 my @wcc_args;
-my $has_c_source = 0;
 my @defines;
 
 for my $arg (@ARGV) {
@@ -94,7 +93,6 @@ for my $arg (@ARGV) {
     push @wcc_args, $arg;
   } elsif ($arg =~ m@[.](c|nasm|obj)\Z(?!\n)@) {
     push @sources, $arg;
-    $has_c_source = 1 if $1 eq "c";
   } else {
     die "$0: fatal: bad file extension for source file (must be .c or .obj): $arg\n";
   }
@@ -637,7 +635,6 @@ sub link_executable($$@) {
   my @skipped_objfns;
   my $do_use_argc = 0;
   my $obji = 0;
-  my $has_small_code = !$has_c_source;  # Ignore (assume true) if no .c files in the command-line.
   while (@_) {  # Next round.
     my $prev_obji = $obji;
     for my $objfn (@_) {
@@ -663,8 +660,9 @@ sub link_executable($$@) {
       $do_use_argc = 1 if exists($obj_undefined_symbols->{"G\$__argc"});
       delete $obj_undefined_symbols->{"G\$__argc"};
       delete $obj_undefined_symbols->{"G\$_cstart_"};
-      $has_small_code = 1 if exists($obj_undefined_symbols->{"G\$_small_code_"});
-      delete $obj_undefined_symbols->{"G\$_small_code_"};
+      # _big_code_ indicates a memory model not supported by dosmc.
+      die "$0: fatal: unexpected symbol: _big_code_\n" if exists($obj_undefined_symbols->{"G\$_big_code_"});
+      delete $obj_undefined_symbols->{"G\$_small_code_"};  # Present if a C function is defined in this .obj file.
       $has_string_instructions |= $obj_has_string_instructions;
       my %old_segment_sizes = %segment_sizes;
       for my $segment_name (@SEGMENT_ORDER) {
@@ -699,8 +697,6 @@ sub link_executable($$@) {
   }
   my @undefined_symbols = map { substr($_, 2) } sort keys %undefined_symbols;  # Strip "G\$" prefix.
   die "$0: fatal: undefined symbols: @undefined_symbols\n" if @undefined_symbols;
-
-  die "$0: fatal: missing symbol: _small_code_\n" if !$has_small_code;  # TODO(pts): If all source files are .nasm, ignore it. How do we discover?
 
   my $entry_count = (defined($text_symbol_ofs{"G\$main_"}) + defined($text_symbol_ofs{"G\$_start_"}));
   die "$0: fatal: too many entry points (main functions)\n" if $entry_count > 1;
