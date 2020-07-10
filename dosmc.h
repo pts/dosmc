@@ -1,5 +1,6 @@
 #ifndef _DOSMC_H_
 #define _DOSMC_H_ 1
+#pragma once
 
 #ifdef __cplusplus
 #define NULL 0
