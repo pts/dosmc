@@ -1,5 +1,5 @@
 ;
-; helloc2w.nasm: feature WASM demo
+; helloc2w.wasm: feature WASM demo
 ; by pts@fazekas.hu at Fri Jul 10 03:25:34 CEST 2020
 ;
 ; DOS source file in WASM syntax, should produce identical .com and .exe
@@ -29,27 +29,31 @@ EXTRN __linker_flag_start_es_psp:BYTE
 EXTRN __linker_flag_uninitialized_bss:BYTE
 EXTRN __linker_flag_omit_cld:BYTE
 
+; This is default and optional in dosmc WASM. If specified, CONST2 below
+; also has to be specified.
+;DGROUP GROUP CONST,CONST2,_DATA,_BSS
+
 _BSS SEGMENT BYTE PUBLIC USE16 'BSS'
   skip1 LABEL BYTE
   ORG 2000H
   skip2 LABEL BYTE
   ORG 2004H
-_BSS  ENDS
+_BSS ENDS
 
 CONST SEGMENT BYTE PUBLIC USE16 'DATA'
   msg: db 'Hello, World!', 13, 10, '$'
-CONST  ENDS
+CONST ENDS
 
 _DATA SEGMENT BYTE PUBLIC USE16 'DATA'
   db 'InData', 0
-_DATA  ENDS
+_DATA ENDS
 
 CONST SEGMENT BYTE PUBLIC USE16 'DATA'
   db 'InConst', 0
-CONST  ENDS
+CONST ENDS
 
 ;CONST2 SEGMENT BYTE PUBLIC USE16 'DATA'
-;CONST2  ENDS
+;CONST2 ENDS
 
 _TEXT SEGMENT BYTE PUBLIC USE16 'TEXT'
   ASSUME CS:_TEXT, DS:DGROUP, SS:DGROUP
@@ -60,6 +64,6 @@ _TEXT SEGMENT BYTE PUBLIC USE16 'TEXT'
   int  21H
   mov  cx,offset skip2
   ret
-_TEXT  ENDS
+_TEXT ENDS
 
 END entry
