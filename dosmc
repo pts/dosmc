@@ -24,14 +24,14 @@ eval '(exit $?0)' && eval 'PERL_BADLANG=x;PATH="$PATH:.";export PERL_BADLANG\
 # !! Make simple_nasm_exe.nasm work with the built-in linker (ds, ss, sp setup is unnecessary, remove that).
 # !! Add -bt=auto for using .com if it fits to 64 KiB of memory, otherwise using .exe. Also autodetect .bin for a single .nasm source file with non-0x100 org in the beginning.
 # !! Add -cl (static library is a concatenation of .obj files) and .lib input to link_executable().
-# !! Add autodetection of .asm files: .nasm vs .wasm input format (by SEGMENT, ASSUME etc.)
 # !! Patch `END' to `END ...' in the -cw output. This is hard (needs .obj file modification to add an LPUBDEF) if there is no label for that already.
 #
 # !! Cleanup flag to remove .tmp files.
 # !! Add Perl script execution mode: `dosmc myscript.pl ...'.
 # !! Add build mode: `dosmc .'.
-# !! Allow .obj files from A86, give source example for section.
+# !! not, buggy: Allow .obj files from A86, give source example for section.
 # !! doc: Allow .obj files from WASM, give source example for section.
+# !! doc: http://nuclear.mutantstargoat.com/articles/retrocoding/dos01-setup/
 #
 
 BEGIN { $^W = 1 }
@@ -851,7 +851,7 @@ for my $arg (@ARGV) {
     push @defines, $arg;
   } elsif ($arg =~ m@\A-@) {
     push @wcc_args, $arg;
-  } elsif ($arg =~ m@[.](c|nasm|wasm|obj)\Z(?!\n)@) {
+  } elsif ($arg =~ m@[.](c|nasm|wasm|asm|obj)\Z(?!\n)@) {
     push @sources, $arg;
   } else {
     die "$0: fatal: bad file extension for source file (must be .c or .obj): $arg\n";
@@ -931,6 +931,29 @@ sub run_command(@) {
     die "$0: assert: command too short\n" if @_ < 2;  # 2 for shell word splitting.
     system(@_)  # Returns 0 on success.
   }
+}
+
+# Detects assembly language, returns "wasm" or "nasm".
+sub detect_asm($) {
+  my $asmfn = $ARGV[0];
+  my $f;
+  die "$0: fatal: cannot open .asm file for reading: $asmfn\n" if !open($f, "<", $asmfn);
+  local $_;
+  while (<$f>) {
+    s@\A\s+@@;
+    if (m@\A(?:;|GLOBAL\s+|PUBLIC\s+)@i) {  # Available in both "wasm" and "nasm".
+    } elsif (m@\A([.]|EXTRN\s+|\w+\s+(?:GROUP|SEGMENT|MACRO|=)\s+)@i) {
+      close($f); return "wasm";
+    } elsif (m@\A(%|ORG\s+|BITS\s+|CPU\s+|EXTERN\s+|GROUP\s+|SEGMENT\s+|SECTION\s+TIMES\s+|__LINKER_FLAG\()@i) {
+      close($f); return "nasm";
+    } elsif (y@\r\n@@c) {
+      last  # Unable to parse first line.
+    }
+  }
+  close($f);
+  # To force "wasm", start the file with `WASM MACRO', then in next line: `ENDM'.
+  # To force "nasm", start the file with `%define NASM'.
+  die "$0: fatal: cannot detect .asm file syntax: $asmfn\n";
 }
 
 my $NASM_OBJ_HEADER = q(
@@ -1156,6 +1179,7 @@ my $forced_objfn = (($is_bin or ($PL ne "-cw" and $PL ne "-ce" and $PL ne "-cn")
 for my $srcfn (@sources) {
   my $srcbase = $srcfn;
   my $ext = $srcbase =~ s@[.]([^./]+)\Z(?!\n)@@s ? $1 : "";  # TODO(pts): Port to Win32.
+  $ext = detect_asm($srcfn) if $ext eq "asm";
   die "$0: fatal: .$ext source incompatible with -bt=bin: $srcfn\n" if $is_bin and $ext ne "nasm";
   if ($ext eq "obj") { push @objfns, $srcfn; next }
   my $objfn = defined($forced_objfn) ? $forced_objfn : $is_bin ? "$srcbase.bin" : $PL eq "-c" ? "$srcbase.obj" : "$srcbase.tmp.obj";
