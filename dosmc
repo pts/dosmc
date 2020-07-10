@@ -25,7 +25,7 @@ eval '(exit $?0)' && eval 'PERL_BADLANG=x;PATH="$PATH:.";export PERL_BADLANG\
 # !! Add -bt=auto for using .com if it fits to 64 KiB of memory, otherwise using .exe. Also autodetect .bin for a single .nasm source file with non-0x100 org in the beginning.
 # !! Add -cl (static library is a concatenation of .obj files) and .lib input to link_executable().
 # !! Add autodetection of .asm files: .nasm vs .wasm input format (by SEGMENT, ASSUME etc.)
-# !! Patch `END' to `END ...' in the -cw output.
+# !! Patch `END' to `END ...' in the -cw output. This is hard (needs .obj file modification to add an LPUBDEF) if there is no label for that already.
 #
 # !! Cleanup flag to remove .tmp files.
 # !! Add Perl script execution mode: `dosmc myscript.pl ...'.
