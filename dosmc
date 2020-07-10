@@ -402,6 +402,7 @@ sub load_obj($$) {
   my @segment_names = ("-SN");
   my %ledata = map { $_ => "" } @SEGMENT_ORDER;  # $segment_name => $ledata_str.
   my %symbol_ofs;   # $symbol => $ofs. Offset is within its section.
+  my %text_symbol_ofs;   # $symbol => $ofs. Offset is within section _TEXT.
   my %segment_symbols = map { $_ => [] } @SEGMENT_ORDER;  # $segment_name => [[$ofs, $symbol], ...].
   my @extdef = ("-ED");
   my %fixupp = map { $_ => [] } @SEGMENT_ORDER;  # $segment_name => [[$endofs, $ofs, $ltypem, $symbol], ...].
@@ -480,6 +481,7 @@ sub load_obj($$) {
         die "$0: fatal: bad symbol type: symbol=$symbol type=$type\n" if $type != 0;
         die "$0: fatal: duplicate symbol within obj: $symbol\n" if exists($symbol_ofs{$symbol});
         $symbol_ofs{$symbol} = $ofs;
+        $text_symbol_ofs{$symbol} = $ofs if $segment_name eq "_TEXT";
         push @{$segment_symbols{$segment_name}}, [$ofs, $symbol];
       }
     } elsif ($type == 0x91) {  # Long PUBDEF.
@@ -575,9 +577,12 @@ sub load_obj($$) {
           die "$0: fatal: EOF in MODEND target displacement\n" if $size < 6;
           my $ofs = unpack("v", substr($data, 4, 2));
           my $symbol = "G\$_start_";
-          die "$0: fatal: duplicate entry point symbol within obj: " . substr($symbol, 2) . "\n" if exists($symbol_ofs{$symbol});
-          $symbol_ofs{$symbol} = $ofs;
-          push @{$segment_symbols{$segment_name}}, [$ofs, $symbol];
+          die "$0: fatal: conflicting entry point symbol within obj: $objfn: " . substr($symbol, 2) . "\n" if
+              exists($symbol_ofs{$symbol}) and !(exists($text_symbol_ofs{$symbol}) and $text_symbol_ofs{$symbol} == $ofs);
+          if (!exists($symbol_ofs{$symbol})) {
+            $text_symbol_ofs{$symbol} = $symbol_ofs{$symbol} = $ofs;
+            push @{$segment_symbols{$segment_name}}, [$ofs, $symbol];
+          }
         } elsif ($b & 0x40) {
           die "$0: fatal: unsupported MODEND mattr: " . sprintf("0x%x", $b). "\n";
         }

@@ -2,7 +2,7 @@ __LINKER_FLAG(omit_cld)
 __LINKER_FLAG(uninitialized_bss)
 __LINKER_FLAG(start_es_psp)
 
-;..start:  ; Either ..start: or _start_ works.
+..start:  ; Either ..start: or _start_ or both works.
 _start_:
 mov ah, 9
 mov dx, msg
