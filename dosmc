@@ -840,8 +840,12 @@ times -(((bss_end-bss_start)+(data_end-data_start)+(code_end-code_start+0x100)+3
     print $exef qq($fullprog_code\n);
     print $exef qq(db 0x16  ; push ss\ndb 0x1f  ; pop ds\n) if $is_exe and $is_data_used;
     print $exef qq(cld\n) if $need_clear_df;
-    if ($do_clear_bss_with_code) {
-      print $exef qq(push es\npush ds\npop es\nmov di, bss_start\nmov cx, (stack-bss_start+1)>>1\nxor ax, ax\nrep stosw\npop es\n);  # clear_bss.
+    if ($do_clear_bss_with_code) {  # $clear_bss.
+      # .com startup: cs=ds=es=ss=PSP, ip=0x100, cs:0x100=first_file_byte.
+      # .exe startup: ds=es=PSP, cs+ip+ss+sp are base+from_exe_header.
+      print $exef qq(push es\npush ds\npop es\n) if $is_exe;
+      print $exef qq(mov di, bss_start\nmov cx, (stack-bss_start+1)>>1\nxor ax, ax\nrep stosw\n);
+      print $exef qq(pop es\n) if $is_exe;
     } elsif ($need_clear_ax) {
       print $exef qq(db 0x31, 0xC0  ; xor ax, ax\n  ; argc=0);
     }
@@ -870,8 +874,11 @@ times -(((bss_end-bss_start)+(data_end-data_start)+(code_end-code_start+0x100)+3
     my $init_regs = "";
     $init_regs .= "\x16\x1F" if $is_exe and $is_data_used;  # push ss; pop ds
     $init_regs .= "\xFC" if $need_clear_df;  # String instructions (e.g. movsb, stosw) need df=0 (cld).
-    # push ds;; pop es;; mov di, bss_start;; mov cx, (stack-bss_start+1)>>1;; xor ax, ax;; rep stosw;; pop es
-    my $clear_bss = $do_clear_bss_with_code ? pack("a4va1va5", "\x06\x1E\x07\xBF", 0, "\xB9", ($segment_sizes{_BSS} + 1) >> 1, "\x31\xC0\xF3\xAB\x07") :  # Affected by fixups below.
+    # !! In wcc ABI, we can ruin es, so don't save+restore it.
+    my $clear_bss = $do_clear_bss_with_code ? (
+        "\x06\x1E\x07" x !(!($is_exe)) .  # push es;; push ds;; pop es
+        pack("a1va1va4", "\xBF", 0, "\xB9", ($segment_sizes{_BSS} + 1) >> 1, "\x31\xC0\xF3\xAB") .  # Affected by fixups below. mov di, bss_start;; mov cx, (stack-bss_start+1)>>1;; xor ax, ax;; rep stosw
+        "\x07" x !(!($is_exe))) :  # pop es
         $need_clear_ax ? "\x31\xC0" : "";  # xor ax, ax  ; argc=0.
     # $call_main is affected by fixups below.
     my($call_main, $call_main_symbol, $call_main_ofs);
@@ -932,7 +939,7 @@ times -(((bss_end-bss_start)+(data_end-data_start)+(code_end-code_start+0x100)+3
           0xffff, $after_text_vofs >> 4, $data_size + $segment_sizes{_BSS} + $stack_align_size + $stack_size, 0, 8, 0);
       print $exef $exe_header;
     }
-    substr($clear_bss, 4, 2) = pack("v", $segment_vofs{_BSS}) if length($clear_bss) >= 6;
+    substr($clear_bss, 1 + 3 * $is_exe, 2) = pack("v", $segment_vofs{_BSS}) if length($clear_bss) >= 6;
     if (defined $call_main_ofs) {
       die "$0: assert: unknown entry point: $call_main_symbol\n" if !defined($symbol_vofs{$call_main_symbol});
       substr($call_main, $call_main_ofs, 2) = pack("v", $symbol_vofs{$call_main_symbol} - ($call_main_ofs + 2 + $segment_vofs{call_main}));
