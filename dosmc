@@ -357,16 +357,25 @@ sub load_obj($$) {
           die "$0: fatal: unknown FIXUPP EXTDEF index: $extdef_idx\n" if $extdef_idx >= @extdef;
           $symbol = $extdef[$extdef_idx];
           #print STDERR "info: FIXUPP 16-bit $is_self \@$ofs EXTDEF $symbol\n";
-        } elsif (($frame == 1 and $target == 4) or  # Segment CONST in DGROUP, by wcc.
-                 ($frame == 5 and $target == 4)) {  # Segment CONST, by nasm.
+        } elsif (($target == 0 or $target == 4) and (
+                  $frame == 1 or  # Segment CONST in DGROUP, by wcc, with $target == 4.
+                  $frame == 5 or  # Segment CONST, by nasm, with $target == 4.
+                  $frame == 0)) {  # Segment CONST and _BSS, by MASM 4.00, with $target == 4 and $target == 0.
           # We usually get it for string literals in CONST.
-          die "$0: fatal: EOF in FIXUPP target\n" if $i + ($frame == 1 ? 2 : 1) > $size;
-          ++$i if $frame == 1;
+          die "$0: fatal: EOF in FIXUPP target\n" if $i + ($frame == 5 ? 1 : 2) > $size;
+          ++$i if $frame == 1;  # Skip group index.
           my $segment_idx = vec($data, $i++, 8);
+          die "$0: fatal: segment index mismatch in FIXUPP\n" if
+              $frame == 0 and $segment_idx != vec($data, $i++, 8);  # Skip duplicate segment index.
           die "$0: fatal: unknown segment: $segment_idx\n" if !$segment_idx or $segment_idx >= @segment_names;
           my $segment_name = $segment_names[$segment_idx];
           #print STDERR "info: FIXUPP 16-bit $is_self \@$ofs SEGMENT $segment_name\n";
           $symbol = "OS\$${segment_name}";
+          if ($target == 0) {  # 2-byte displacement.
+            die "$0: fatal: EOF in FIXUPP displacement\n" if $i + 2 > $size;
+            my $dofs = unpack("v", substr($data, $i, 2)); $i += 2;
+            substr($ledata{$last_segment_name}, $ofs, 2) = pack("v", unpack("v", substr($ledata{$last_segment_name}, $ofs, 2)) + $dofs) if $dofs;
+          }
         } else {
           die "$0: fatal: unsupported FIXUPP: frame=$frame target=$target\n";
         }
@@ -525,11 +534,12 @@ sub link_executable($$$$@) {
   my @undefined_symbols;
   my @undefined_linker_flags;
   for my $symbol (map { substr($_, 2) } sort keys %undefined_symbols) {  # Strip "G\$" prefix.
-    if ($symbol !~ s@\A__linker_flag_@@) {
+    if ($symbol !~ s@\A__LINKER_FLAG_@@i) {
       push @undefined_symbols, $symbol;
-    } elsif (exists($LINKER_FLAG_OK{$symbol})) {
+    } elsif (exists($LINKER_FLAG_OK{lc($symbol)})) {
+      # Microsoft MASM 4.0 creates all symbols in uppercase.
       # Created by __LINKER_FLAG($symbol) in .c and .nasm files.
-      $lf{$symbol} = 1;
+      $lf{lc($symbol)} = 1;
     } else {
       push @undefined_linker_flags, $symbol;
     }
