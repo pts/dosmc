@@ -575,7 +575,7 @@ sub load_obj($$) {
           die "$0: fatal: EOF in MODEND target displacement\n" if $size < 6;
           my $ofs = unpack("v", substr($data, 4, 2));
           my $symbol = "G\$_start_";
-          die "$0: fatal: duplicate entry point symbol within obj: $symbol\n" if exists($symbol_ofs{$symbol});
+          die "$0: fatal: duplicate entry point symbol within obj: " . substr($symbol, 2) . "\n" if exists($symbol_ofs{$symbol});
           $symbol_ofs{$symbol} = $ofs;
           push @{$segment_symbols{$segment_name}}, [$ofs, $symbol];
         } elsif ($b & 0x40) {
