@@ -219,7 +219,7 @@ for my $srcfn (@sources) {
     $srcfnq =~ s@([\x00-\x1F\\\$"\x7F-\xFF])@ "\\x" . pack("H", $1) @ge;
     # TODO(pts): Port to Win32 with \ in the filename.
     die "$0: fatal: cannot write to: $tmpfn\n" if !print($tmpf
-        qq(bits 16\ncpu $nasm_cpu\n;uppercase\nsegment text\n) .
+        qq(bits 16\ncpu $nasm_cpu\n;uppercase\nsegment text\nglobal _start_\n) .
         qq(%define __LINKER_FLAG(name) extern __linker_flag_ %+ name\n) .
         qq(%include "$srcfnq"\n));
     die "$0: fatal: cannot close: $tmpfn\n" if !close($tmpf);
