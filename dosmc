@@ -26,7 +26,7 @@ eval '(exit $?0)' && eval 'PERL_BADLANG=x;PATH="$PATH:.";export PERL_BADLANG\
 # !! Add size optimizations for nasm input, especially for .exe output, should be just (push ss;; pop ds).
 # !! Make an `org 0x100 ... section .data' .nasm file work with both .com and with dosmc .com and .exe .
 # !! Make simple_nasm_exe.nasm work with the built-in linker (ds, ss, sp setup is unnecessary, remove that).
-# !! Add -bt=cxe for using .com if it fits to 64 KiB of memory, otherwise using .exe.
+# !! Add -bt=auto for using .com if it fits to 64 KiB of memory, otherwise using .exe. Also autodetect .bin for a single .nasm source file with non-0x100 org in the beginning.
 # !! Add -cl (static library is a concatenation of .obj files) and .lib input to link_executable().
 #
 # !! Cleanup flag to remove .tmp files.
