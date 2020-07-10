@@ -54,229 +54,6 @@ if (!@ARGV or $ARGV[0] eq "-?" or $ARGV[0] eq "-h" or $ARGV[0] eq "--help") {
   exit(@ARGV ? 0 : 1);
 }
 
-my $ARG = "";
-my $EXT = "";
-my $EXEOUT = "";
-my $Q = "-q";
-my $PL = "-ce";
-my $CPUF = "-0";
-my @sources;
-my @wcc_args;
-my @defines;
-
-for my $arg (@ARGV) {
-  if ($arg eq "--" or $arg eq "-" or !length($arg)) {
-    die "$0: fatal: unsupported argument: $arg\n";
-  } elsif ($arg eq "-pl" or $arg eq "-zs" or $arg eq "-c" or $arg eq "-ce" or $arg eq "-cn" or $arg eq "-cw") {
-    $PL = $arg;  # Do preprocessing (-pl), syntax check (-zs), compile to .obj (-c), emit exec without nasm (nonstandard) (-ce), emit exec with nasm (nonstandard) (-cw), compile to .wasm (nonstandard) (-cw).
-  } elsif ($arg eq "-q") {
-    $Q = $arg;  # Quiet. Default.
-  } elsif ($arg eq "-nq") {  # No such flag in wcc or wcl.
-    $Q = "";
-  } elsif ($arg eq "-bt=dos" or $arg eq "-bt=exe") {
-    $EXT = "exe";  # Default.
-  } elsif ($arg eq "-bt=com" or $arg eq "-mt") {
-    $EXT = "com";
-  } elsif ($arg eq "-bt=bin" or $arg eq "-mb") {  # No such flag value in wcc or wcl.
-    $EXT = "bin";
-  } elsif ($arg =~ m@\A-bt@) {
-    die"$0: fatal: unsupported target: $arg\n";
-  } elsif ($arg =~ m@\A-(?:fo|fe)=(.*)\Z(?!\n)@s) {
-    $EXEOUT = $1;  # `wcc -fo=...' for object files; `wcl -fe=...' for executable files. For dosmc, it's final output file.
-  } elsif ($arg eq "-ms") {
-  } elsif ($arg =~ m@\A-m@) {
-    die "$0: fatal: only -ms (small memory model) supported: $arg\n";
-  } elsif ($arg =~ m@\A-[0-6]\Z(?!\n)@) {
-    $CPUF = $arg;
-  } elsif ($arg =~ m@\A-(?:b|zW|zw)@) {
-    die "$0: fatal: unsupported Windows target: $arg\n";
-  } elsif ($arg eq "-ecw") {  # We support only the Watcom default calling convention (and name mangling).
-  } elsif ($arg =~ m@\A-ec@) {
-    die "$0: fatal: unsupported default calling convention: $arg\n";
-  } elsif ($arg =~ m@\A-[DU]@) {
-    push @defines, $arg;
-  } elsif ($arg =~ m@\A-@) {
-    push @wcc_args, $arg;
-  } elsif ($arg =~ m@[.](c|nasm|obj)\Z(?!\n)@) {
-    push @sources, $arg;
-  } else {
-    die "$0: fatal: bad file extension for source file (must be .c or .obj): $arg\n";
-  }
-}
-$EXT = $EXEOUT =~ m@[.](?:com|COM)\Z(?!\n)@ ? "com" : "exe" if !length($EXT);
-die "$0: fatal: missing source file argument\n" if !@sources;
-for my $srcfn (@sources) {
-  die "$0: fatal: source file not found: $srcfn\n" if !-f($srcfn);
-}
-my $is_multiple_sources_ok = 0;
-
-die "$0: fatal: missing executable $MYDIR/ow2bin/wcc; run $MYDIR/download_openwatcom.sh first\n" if !-x("$MYDIR/ow2bin/wcc");
-my $in1base = $sources[0]; $in1base =~ s@[.][^./]+\Z(?!\n)@@s;  # TODO(pts): Port to Win32.
-my $PLL = "";
-die "$0: fatal: output mode incompatible -bt=bin: $PL\n" if
-    $EXT eq "bin" and !($PL eq "-ce" or $PL eq "-cn" or $PL eq "-pl");
-if ($PL eq "-cn" or $PL eq "-ce") {
-  # !! TODO(pts): Add -cm to produce .nasm output.
-  if ($EXT eq "bin") {
-    $is_multiple_sources_ok = 1 if !length($EXEOUT);
-    $PL = "-bt=bin" if !$is_multiple_sources_ok;  # For error message below.
-  } else {
-    $EXEOUT = "$in1base.$EXT" if !length($EXEOUT) and $EXT ne "bin";
-    $is_multiple_sources_ok = 1;
-  }
-} elsif ($PL eq "-cw") {
-  $EXEOUT = "$in1base.wasm" if !length($EXEOUT);
-} else {
-  if ($PL eq "-c") {
-    $is_multiple_sources_ok = 1 if !length($EXEOUT);
-  } else {
-    $PLL = $PL;
-    $is_multiple_sources_ok = 1 if $PL eq "-zs";
-    push @wcc_args, "-fo=$EXEOUT" if length($EXEOUT);
-  }
-}
-die "$0: fatal: multiple source file arguments with $PL\n" if !$is_multiple_sources_ok and @sources > 1;
-
-delete $ENV{WATCOM};
-delete $ENV{INCLUDE};
-$ENV{PATH} = "/bin:/usr/bin" if !defined($ENV{PATH}) or !length($ENV{PATH});  # TODO(pts): Port to Win32.
-$ENV{PATH} = "$MYDIR/ow2bin:$ENV{PATH}";  # TODO(pts): Port to Win32.
-
-# Quote string from Bourne-like shells.
-# !! Port this to Win32.
-sub shqe($) {
-  return $_[0] if $_[0]=~/\A[-.\/\w][-.\/\w=]*\Z(?!\n)/;
-  my $S=$_[0];
-  $S=~s@'@'\\''@g;
-  "'$S'"
-}
-
-sub print_command(@) {
-  my $redirect = "";
-  $redirect .= " >" . shqe(substr(pop(@_), 3)) if @_ and substr($_[-1], 0, 3) eq " > ";
-  my $cmdstr = join(" ", map { shqe($_) } @_);
-  select(STDOUT); $| = 1; print ": $cmdstr$redirect\n";
-}
-
-sub run_command(@) {
-  print_command(@_) if !length($Q);
-  if (substr($_[-1], 0, 3) eq " > ") {  # Redirect stdout.
-    die "$0: assert: command too short\n" if @_ < 2;  # 2 for shell word splitting.
-    my $fn = substr(pop(@_), 3);
-    my $f;
-    die "$0: fatal: cannot open for writing: redirect stdout\n" if !open($f, ">", $fn);
-    my $old_stdoutf;
-    die "$0: fatal: cannot redirect old stdout\n" if !open($old_stdoutf, ">&", \*STDOUT);
-    die "$0: fatal: cannot redirect stdout\n" if !open(STDOUT, ">&", $f);
-    close($f);
-    my $status = system(@_);
-    die "$0: fatal: cannot redirect back stdout\n" if !open(STDOUT, ">&", $old_stdoutf);
-    close($old_stdoutf);
-    $status
-  } else {
-    die "$0: assert: command too short\n" if @_ < 2;  # 2 for shell word splitting.
-    system(@_)  # Returns 0 on success.
-  }
-}
-
-my $NASM_OBJ_HEADER = q(
-;uppercase  ; Would also convert labels to uppercase.
-%macro org 1  ; .com file source emulation.
-%if %1!=256
-%error expecting org 0x100 for compatibility with .com file sources
-times -1 db 0
-%endif
-__LINKER_FLAG(omit_cld)
-__LINKER_FLAG(uninitialized_bss)
-__LINKER_FLAG(start_es_psp)
-; Do not allow any other entry point.
-..start:
-_start_:
-%endmacro
-segment text
-global _start_
-%define __LINKER_FLAG(name) extern __linker_flag_ %+ name
-);
-
-# Corresponding `wcc: owcc' flags:
-# -v: lack of -q
-# -bdos: -bt=dos
-# -ms: -mcomodel=s (default)
-# -i=... : -I...
-# -s: -fno-stack-check
-# -os: -Os  TODO(pts): Should we do -om -oi -ol (from -ox) as well?
-# -0: -march=i86
-# -W: ??
-# ??: -W
-# -w4: -Wall
-# -wx: -Wextra
-# -we: -Werror
-# -wcd=202: -Wcd=202 ??
-# -D...: -D...
-# (default to generate obj, do not link): -c
-# -fo=...: -o ...
-# -fr: ?? Set error filename.
-# -pl: -E
-# No need to set $WATCOM or to extend $PATH.
-# 202: symbol defined but not referenced (useful for static functions).
-my $is_bin = $EXT eq "bin";
-my @d_args;  # Applies to wcc and nasm.
-push @d_args, "-D__DOSMC__";  # TODO(pts): Add these and also $CPUF for .nasm.
-push @d_args, "-D__DOSMC_COM__" if $EXT eq "com";
-push @d_args, "-D__DOSMC_BIN__" if $is_bin;
-push @d_args, @defines;
-my @wcc_cmd = ('wcc', @d_args);
-push @wcc_cmd, $Q if length($Q);
-push @wcc_cmd, $PLL if length($PLL);
-push @wcc_cmd, "-bt=dos", "-ms", "-i=$MYDIR", "-s", "-os", "-W", "-w4", "-wx", "-we", "-wcd=202", $CPUF, "-fr", @wcc_args;
-my $wcc_cmd_size = @wcc_cmd;
-my $nasm_cpu = $CPUF eq "-0" ? "8086" : substr($CPUF, 1) . "86";
-# TODO(pts): Copy some flags from @ARGV, pass as @nasm_flags here.
-my @nasm_cmd = ("nasm", @d_args, "-O9", "-f", $is_bin ? "bin" : "obj", "-w+orphan-labels");  # Default is `bits 16'.
-my $nasm_cmd_size = @nasm_cmd;
-my @objfns;
-my $do_objfn_arg = ($PL eq "-cw" or $PL eq "-ce" or $PL eq "-cn" or $PL eq "-c");
-my $forced_objfn = (($is_bin or ($PL ne "-cw" and $PL ne "-ce" and $PL ne "-cn")) and length($EXEOUT)) ? $EXEOUT : undef;
-for my $srcfn (@sources) {
-  my $srcbase = $srcfn;
-  my $ext = $srcbase =~ s@[.]([^./]+)\Z(?!\n)@@s ? $1 : "";  # TODO(pts): Port to Win32.
-  die "$0: fatal: .$ext source incompatible with -bt=bin: $srcfn\n" if $is_bin and $ext ne "nasm";
-  if ($ext eq "obj") { push @objfns, $srcfn; next }
-  my $objfn = defined($forced_objfn) ? $forced_objfn : $is_bin ? "$srcbase.bin" : $PL eq "-c" ? "$srcbase.obj" : "$srcbase.tmp.obj";
-  push @objfns, $objfn;
-  if ($ext eq "nasm") {
-    die "$0: fatal: $PL with .nasm source not supported: $srcfn\n" if !$do_objfn_arg and $PL ne "-pl";
-    # We predeclare something in $tmpfn. Only NASM >= 2.14 has the --before
-    # flag to avoid this.
-    my $tmpfn = "$srcbase.inc.tmp.nasm";
-    my $tmpf;
-    die "$0: fatal: cannot open for writing: $tmpfn\n" if !open($tmpf, ">", $tmpfn);
-    my $srcfnq = $srcfn;
-    $srcfnq =~ s@([\x00-\x1F\\\$"\x7F-\xFF])@ "\\x" . pack("H", $1) @ge;
-    my $nasm_header = $is_bin ? "" : $NASM_OBJ_HEADER;
-    # TODO(pts): Port to Win32 with \ in the filename.
-    die "$0: fatal: cannot write to: $tmpfn\n" if !print($tmpf
-        qq(bits 16\ncpu $nasm_cpu\n$nasm_header%include "$srcfnq"\n));
-    die "$0: fatal: cannot close: $tmpfn\n" if !close($tmpf);
-    if ($PL eq "-pl") {
-      push @nasm_cmd, "-E", $tmpfn;
-    } else {
-      push @nasm_cmd, "-o", $objfn, $tmpfn;
-    }
-    if (run_command(@nasm_cmd)) {
-      print STDERR "$0: fatal: nasm failed\n"; exit(3);
-    }
-    splice @nasm_cmd, $nasm_cmd_size;
-  } else {
-    push @wcc_cmd, "-fo=$objfn" if $do_objfn_arg;
-    push @wcc_cmd, $srcfn;
-    if (run_command(@wcc_cmd)) {
-      print STDERR "$0: fatal: wcc failed\n"; exit(2);
-    }
-    splice @wcc_cmd, $wcc_cmd_size;
-  }
-}
-
 # --- Linker: Reads .obj files, writes .exe and .com files (for equivalent .nasm files).
 
 # Checks if the entry point contains an instructions to exit immediately,
@@ -662,11 +439,9 @@ sub load_obj($$) {
   \%undefined_symbols, \%segment_symbols, \%ledata, \%segment_sizes, \%fixupp, $has_string_instructions
 }
 
-sub link_executable($$@) {
-  # !! Move this up, get rid of global variables.
-  my $is_nasm = $_[0]; my $exefn = $_[1];  # Also uses: $CPUF and $EXT.
+sub link_executable($$$$@) {
+  my($is_nasm, $exefn, $EXT, $nasm_cpu) = splice(@_, 0, 4);  # Keep .obj files in @_.
   local $0 = "dosmc-linker-$EXT" . ($is_nasm ? "-nasm" : "");
-  splice @_, 0, 2;  # Remove the first 2 arguments, keep .obj files.
   die "$0: assert: unknown EXT: $EXT\n" if $EXT ne "exe" and $EXT ne "com";
   my %undefined_symbols;
   my %symbol_ofs;   # $symbol => $ofs. Offset is within its section.
@@ -1012,12 +787,235 @@ times -(((bss_end-bss_start)+(data_end-data_start)+(code_end-code_start+0x100)+3
 
 # --- End of linker, main code continues.
 
+my $ARG = "";
+my $EXT = "";
+my $EXEOUT = "";
+my $Q = "-q";
+my $PL = "-ce";
+my $CPUF = "-0";
+my @sources;
+my @wcc_args;
+my @defines;
+
+for my $arg (@ARGV) {
+  if ($arg eq "--" or $arg eq "-" or !length($arg)) {
+    die "$0: fatal: unsupported argument: $arg\n";
+  } elsif ($arg eq "-pl" or $arg eq "-zs" or $arg eq "-c" or $arg eq "-ce" or $arg eq "-cn" or $arg eq "-cw") {
+    $PL = $arg;  # Do preprocessing (-pl), syntax check (-zs), compile to .obj (-c), emit exec without nasm (nonstandard) (-ce), emit exec with nasm (nonstandard) (-cw), compile to .wasm (nonstandard) (-cw).
+  } elsif ($arg eq "-q") {
+    $Q = $arg;  # Quiet. Default.
+  } elsif ($arg eq "-nq") {  # No such flag in wcc or wcl.
+    $Q = "";
+  } elsif ($arg eq "-bt=dos" or $arg eq "-bt=exe") {
+    $EXT = "exe";  # Default.
+  } elsif ($arg eq "-bt=com" or $arg eq "-mt") {
+    $EXT = "com";
+  } elsif ($arg eq "-bt=bin" or $arg eq "-mb") {  # No such flag value in wcc or wcl.
+    $EXT = "bin";
+  } elsif ($arg =~ m@\A-bt@) {
+    die"$0: fatal: unsupported target: $arg\n";
+  } elsif ($arg =~ m@\A-(?:fo|fe)=(.*)\Z(?!\n)@s) {
+    $EXEOUT = $1;  # `wcc -fo=...' for object files; `wcl -fe=...' for executable files. For dosmc, it's final output file.
+  } elsif ($arg eq "-ms") {
+  } elsif ($arg =~ m@\A-m@) {
+    die "$0: fatal: only -ms (small memory model) supported: $arg\n";
+  } elsif ($arg =~ m@\A-[0-6]\Z(?!\n)@) {
+    $CPUF = $arg;
+  } elsif ($arg =~ m@\A-(?:b|zW|zw)@) {
+    die "$0: fatal: unsupported Windows target: $arg\n";
+  } elsif ($arg eq "-ecw") {  # We support only the Watcom default calling convention (and name mangling).
+  } elsif ($arg =~ m@\A-ec@) {
+    die "$0: fatal: unsupported default calling convention: $arg\n";
+  } elsif ($arg =~ m@\A-[DU]@) {
+    push @defines, $arg;
+  } elsif ($arg =~ m@\A-@) {
+    push @wcc_args, $arg;
+  } elsif ($arg =~ m@[.](c|nasm|obj)\Z(?!\n)@) {
+    push @sources, $arg;
+  } else {
+    die "$0: fatal: bad file extension for source file (must be .c or .obj): $arg\n";
+  }
+}
+$EXT = $EXEOUT =~ m@[.](?:com|COM)\Z(?!\n)@ ? "com" : "exe" if !length($EXT);
+die "$0: fatal: missing source file argument\n" if !@sources;
+for my $srcfn (@sources) {
+  die "$0: fatal: source file not found: $srcfn\n" if !-f($srcfn);
+}
+my $is_multiple_sources_ok = 0;
+
+die "$0: fatal: missing executable $MYDIR/ow2bin/wcc; run $MYDIR/download_openwatcom.sh first\n" if !-x("$MYDIR/ow2bin/wcc");
+my $in1base = $sources[0]; $in1base =~ s@[.][^./]+\Z(?!\n)@@s;  # TODO(pts): Port to Win32.
+my $PLL = "";
+die "$0: fatal: output mode incompatible -bt=bin: $PL\n" if
+    $EXT eq "bin" and !($PL eq "-ce" or $PL eq "-cn" or $PL eq "-pl");
+if ($PL eq "-cn" or $PL eq "-ce") {
+  # !! TODO(pts): Add -cm to produce .nasm output.
+  if ($EXT eq "bin") {
+    $is_multiple_sources_ok = 1 if !length($EXEOUT);
+    $PL = "-bt=bin" if !$is_multiple_sources_ok;  # For error message below.
+  } else {
+    $EXEOUT = "$in1base.$EXT" if !length($EXEOUT) and $EXT ne "bin";
+    $is_multiple_sources_ok = 1;
+  }
+} elsif ($PL eq "-cw") {
+  $EXEOUT = "$in1base.wasm" if !length($EXEOUT);
+} else {
+  if ($PL eq "-c") {
+    $is_multiple_sources_ok = 1 if !length($EXEOUT);
+  } else {
+    $PLL = $PL;
+    $is_multiple_sources_ok = 1 if $PL eq "-zs";
+    push @wcc_args, "-fo=$EXEOUT" if length($EXEOUT);
+  }
+}
+die "$0: fatal: multiple source file arguments with $PL\n" if !$is_multiple_sources_ok and @sources > 1;
+
+delete $ENV{WATCOM};
+delete $ENV{INCLUDE};
+$ENV{PATH} = "/bin:/usr/bin" if !defined($ENV{PATH}) or !length($ENV{PATH});  # TODO(pts): Port to Win32.
+$ENV{PATH} = "$MYDIR/ow2bin:$ENV{PATH}";  # TODO(pts): Port to Win32.
+
+# Quote string from Bourne-like shells.
+# !! Port this to Win32.
+sub shqe($) {
+  return $_[0] if $_[0]=~/\A[-.\/\w][-.\/\w=]*\Z(?!\n)/;
+  my $S=$_[0];
+  $S=~s@'@'\\''@g;
+  "'$S'"
+}
+
+sub print_command(@) {
+  my $redirect = "";
+  $redirect .= " >" . shqe(substr(pop(@_), 3)) if @_ and substr($_[-1], 0, 3) eq " > ";
+  my $cmdstr = join(" ", map { shqe($_) } @_);
+  select(STDOUT); $| = 1; print ": $cmdstr$redirect\n";
+}
+
+sub run_command(@) {
+  print_command(@_) if !length($Q);
+  if (substr($_[-1], 0, 3) eq " > ") {  # Redirect stdout.
+    die "$0: assert: command too short\n" if @_ < 2;  # 2 for shell word splitting.
+    my $fn = substr(pop(@_), 3);
+    my $f;
+    die "$0: fatal: cannot open for writing: redirect stdout\n" if !open($f, ">", $fn);
+    my $old_stdoutf;
+    die "$0: fatal: cannot redirect old stdout\n" if !open($old_stdoutf, ">&", \*STDOUT);
+    die "$0: fatal: cannot redirect stdout\n" if !open(STDOUT, ">&", $f);
+    close($f);
+    my $status = system(@_);
+    die "$0: fatal: cannot redirect back stdout\n" if !open(STDOUT, ">&", $old_stdoutf);
+    close($old_stdoutf);
+    $status
+  } else {
+    die "$0: assert: command too short\n" if @_ < 2;  # 2 for shell word splitting.
+    system(@_)  # Returns 0 on success.
+  }
+}
+
+my $NASM_OBJ_HEADER = q(
+;uppercase  ; Would also convert labels to uppercase.
+%macro org 1  ; .com file source emulation.
+%if %1!=256
+%error expecting org 0x100 for compatibility with .com file sources
+times -1 db 0
+%endif
+__LINKER_FLAG(omit_cld)
+__LINKER_FLAG(uninitialized_bss)
+__LINKER_FLAG(start_es_psp)
+; Do not allow any other entry point.
+..start:
+_start_:
+%endmacro
+segment text
+global _start_
+%define __LINKER_FLAG(name) extern __linker_flag_ %+ name
+);
+
+# Corresponding `wcc: owcc' flags:
+# -v: lack of -q
+# -bdos: -bt=dos
+# -ms: -mcomodel=s (default)
+# -i=... : -I...
+# -s: -fno-stack-check
+# -os: -Os  TODO(pts): Should we do -om -oi -ol (from -ox) as well?
+# -0: -march=i86
+# -W: ??
+# ??: -W
+# -w4: -Wall
+# -wx: -Wextra
+# -we: -Werror
+# -wcd=202: -Wcd=202 ??
+# -D...: -D...
+# (default to generate obj, do not link): -c
+# -fo=...: -o ...
+# -fr: ?? Set error filename.
+# -pl: -E
+# No need to set $WATCOM or to extend $PATH.
+# 202: symbol defined but not referenced (useful for static functions).
+my $is_bin = $EXT eq "bin";
+my @d_args;  # Applies to wcc and nasm.
+push @d_args, "-D__DOSMC__";
+push @d_args, "-D__DOSMC_COM__" if $EXT eq "com";  # Shouldn't make a difference, identical .obj files work for .exe and .com.
+push @d_args, "-D__DOSMC_BIN__" if $is_bin;
+push @d_args, @defines;
+my @wcc_cmd = ('wcc', @d_args);
+push @wcc_cmd, $Q if length($Q);
+push @wcc_cmd, $PLL if length($PLL);
+push @wcc_cmd, "-bt=dos", "-ms", "-i=$MYDIR", "-s", "-os", "-W", "-w4", "-wx", "-we", "-wcd=202", $CPUF, "-fr", @wcc_args;
+my $wcc_cmd_size = @wcc_cmd;
+my $nasm_cpu = $CPUF eq "-0" ? "8086" : substr($CPUF, 1) . "86";
+# TODO(pts): Copy some flags from @ARGV, pass as @nasm_flags here.
+my @nasm_cmd = ("nasm", @d_args, "-O9", "-f", $is_bin ? "bin" : "obj", "-w+orphan-labels");  # Default is `bits 16'.
+my $nasm_cmd_size = @nasm_cmd;
+my @objfns;
+my $do_objfn_arg = ($PL eq "-cw" or $PL eq "-ce" or $PL eq "-cn" or $PL eq "-c");
+my $forced_objfn = (($is_bin or ($PL ne "-cw" and $PL ne "-ce" and $PL ne "-cn")) and length($EXEOUT)) ? $EXEOUT : undef;
+for my $srcfn (@sources) {
+  my $srcbase = $srcfn;
+  my $ext = $srcbase =~ s@[.]([^./]+)\Z(?!\n)@@s ? $1 : "";  # TODO(pts): Port to Win32.
+  die "$0: fatal: .$ext source incompatible with -bt=bin: $srcfn\n" if $is_bin and $ext ne "nasm";
+  if ($ext eq "obj") { push @objfns, $srcfn; next }
+  my $objfn = defined($forced_objfn) ? $forced_objfn : $is_bin ? "$srcbase.bin" : $PL eq "-c" ? "$srcbase.obj" : "$srcbase.tmp.obj";
+  push @objfns, $objfn;
+  if ($ext eq "nasm") {
+    die "$0: fatal: $PL with .nasm source not supported: $srcfn\n" if !$do_objfn_arg and $PL ne "-pl";
+    # We predeclare something in $tmpfn. Only NASM >= 2.14 has the --before
+    # flag to avoid this.
+    my $tmpfn = "$srcbase.inc.tmp.nasm";
+    my $tmpf;
+    die "$0: fatal: cannot open for writing: $tmpfn\n" if !open($tmpf, ">", $tmpfn);
+    my $srcfnq = $srcfn;
+    $srcfnq =~ s@([\x00-\x1F\\\$"\x7F-\xFF])@ "\\x" . pack("H", $1) @ge;
+    my $nasm_header = $is_bin ? "" : $NASM_OBJ_HEADER;
+    # TODO(pts): Port to Win32 with \ in the filename.
+    die "$0: fatal: cannot write to: $tmpfn\n" if !print($tmpf
+        qq(bits 16\ncpu $nasm_cpu\n$nasm_header%include "$srcfnq"\n));
+    die "$0: fatal: cannot close: $tmpfn\n" if !close($tmpf);
+    if ($PL eq "-pl") {
+      push @nasm_cmd, "-E", $tmpfn;
+    } else {
+      push @nasm_cmd, "-o", $objfn, $tmpfn;
+    }
+    if (run_command(@nasm_cmd)) {
+      print STDERR "$0: fatal: nasm failed\n"; exit(3);
+    }
+    splice @nasm_cmd, $nasm_cmd_size;
+  } else {
+    push @wcc_cmd, "-fo=$objfn" if $do_objfn_arg;
+    push @wcc_cmd, $srcfn;
+    if (run_command(@wcc_cmd)) {
+      print STDERR "$0: fatal: wcc failed\n"; exit(2);
+    }
+    splice @wcc_cmd, $wcc_cmd_size;
+  }
+}
+
 if ($is_bin) {
 } elsif ($PL eq "-ce" or $PL eq "-cn") {
   my $is_nasm = $PL eq "-cn" ? 1 : 0;
   my $exefn = $is_nasm ? "$in1base.tmp.nasm" : $EXEOUT;
-  print_command("//link", "-bt=$EXT", $CPUF, "--nasm=$is_nasm",  "-fe=$exefn", @objfns) if !length($Q);
-  link_executable($is_nasm,  $exefn, @objfns);
+  print_command("//link", "-bt=$EXT", $CPUF, ($is_nasm ? "-cn" : "-ce"),  "-fe=$exefn", @objfns) if !length($Q);
+  link_executable($is_nasm,  $exefn, $EXT, $nasm_cpu, @objfns);
   # .nasm output ($EXEFN) cannot be used to produce an .obj file again (i.e. nasm -f obj).
   # TODO(pts): Add support for this, preferably autodetection.
   if ($is_nasm and run_command("nasm", "-f", "bin", "-o", $EXEOUT, $exefn)) {
