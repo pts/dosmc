@@ -29,6 +29,7 @@ eval '(exit $?0)' && eval 'PERL_BADLANG=x;PATH="$PATH:.";export PERL_BADLANG\
 # !! Add -bt=auto for using .com if it fits to 64 KiB of memory, otherwise using .exe. Also autodetect .bin for a single .nasm source file with non-0x100 org in the beginning.
 # !! Add -cl (static library is a concatenation of .obj files) and .lib input to link_executable().
 # !! Add autodetection of .asm files: .nasm vs .wasm input format (by SEGMENT, ASSUME etc.)
+# !! Patch `END' to `END ...' in the -cw output.
 #
 # !! Cleanup flag to remove .tmp files.
 # !! Add Perl script execution mode: `dosmc myscript.pl ...'.
@@ -253,7 +254,8 @@ sub load_obj($$) {
       $segment_name = "TEXT" if $segment_name eq "CODE";
       substr($segment_name, 0, 0) = "_" if $segment_name !~ m@\ACONST@;
       die "$0: fatal: unsupported segment: $segment_name\n" if !$SEGMENT_NAME_OK{$segment_name};
-      die "$0: fatal: duplicate segment: $segment_name\n" if exists($segment_sizes{$segment_name});
+      # Example alternative spellings: .bss and _BSS.
+      die "$0: fatal: duplicate segment (maybe alternative spellings?): $segment_name\n" if exists($segment_sizes{$segment_name});
       $segment_sizes{$segment_name} = $segment_size;
       # Some segment indexes would become 2 bytes, we do not support that.
       die "$0: fatal: too many segments\n" if @segment_names >= 127;
@@ -811,6 +813,10 @@ for my $arg (@ARGV) {
     die "$0: fatal: unsupported argument: $arg\n";
   } elsif ($arg eq "-pl" or $arg eq "-zs" or $arg eq "-c" or $arg eq "-ce" or $arg eq "-cn" or $arg eq "-cw") {
     $PL = $arg;  # Do preprocessing (-pl), syntax check (-zs), compile to .obj (-c), emit exec without nasm (nonstandard) (-ce), emit exec with nasm (nonstandard) (-cw), compile to .wasm (nonstandard) (-cw).
+    # The .wasm output file of -cw can be used as a source file in the next
+    # dosmc invocation. It will produce an identical executable (tested
+    # with examples/helloc2.nasm), except that the entry point is not
+    # reported by -cw (i.e. wdis emits `END' instead of `END ...').
   } elsif ($arg eq "-q") {
     $Q = $arg;  # Quiet. Default.
   } elsif ($arg eq "-nq") {  # No such flag in wcc or wcl.
@@ -935,9 +941,167 @@ __LINKER_FLAG(start_es_psp)
 ..start:
 _start_:
 %endmacro
-segment text
 global _start_
 %define __LINKER_FLAG(name) extern __linker_flag_ %+ name
+segment _TEXT class=TEXT align=1  ; Make it the last one (default).
+segment _BSS class=BSS align=1
+segment _DATA class=DATA align=1
+segment CONST class=DATA align=1
+segment CONST2 class=DATA align=1
+;segment STACK class=STACK align=2
+segment _TEXT  ; Select default.
+
+; The purpose of this magic (of redefining `segment' and `section') is to
+; canonicalize segment names to those which wcc generates, and slo to avoid
+; the NASM warning `warning: segment attributes specified on redeclaration
+; of segment: ignoring' when `segment .bss align=1' is present in the .nasm
+; file (it will be transformed to just `segment .bss', which prevents the
+; warning).
+%define segment __OBJ_SEGMENT__
+%define section __OBJ_SEGMENT__
+%define SEGMENT __OBJ_SEGMENT__  ; FYI In NASM 0.99.06 .. 2.14.02, this still produces an error for mixed-case segMent etc.: error: unrecognised directive [__OBJ_SEGMENT__]
+%define SECTION __OBJ_SEGMENT__
+%macro __OBJ_SEGMENT__ 1
+%undef __SEGTRY_unchanged
+%undef __SEGTRY_.text
+%undef __SEGTRY_.TEXT
+%undef __SEGTRY__text
+%undef __SEGTRY__TEXT
+%undef __SEGTRY_text
+%undef __SEGTRY_TEXT
+%undef __SEGTRY_.code
+%undef __SEGTRY_.CODE
+%undef __SEGTRY__code
+%undef __SEGTRY__CODE
+%undef __SEGTRY_code
+%undef __SEGTRY_CODE
+%undef __SEGTRY_.bss
+%undef __SEGTRY_.BSS
+%undef __SEGTRY__bss
+%undef __SEGTRY__BSS
+%undef __SEGTRY_bss
+%undef __SEGTRY_BSS
+%undef __SEGTRY_.stack
+%undef __SEGTRY_.STACK
+%undef __SEGTRY__stack
+%undef __SEGTRY__STACK
+%undef __SEGTRY_stack
+%undef __SEGTRY_STACK
+%undef __SEGTRY_.data
+%undef __SEGTRY_.DATA
+%undef __SEGTRY__data
+%undef __SEGTRY__DATA
+%undef __SEGTRY_data
+%undef __SEGTRY_DATA
+%undef __SEGTRY_.const
+%undef __SEGTRY_.CONST
+%undef __SEGTRY__const
+%undef __SEGTRY__CONST
+%undef __SEGTRY_const
+%undef __SEGTRY_CONST
+%undef __SEGTRY_.const2
+%undef __SEGTRY_.CONST2
+%undef __SEGTRY__const2
+%undef __SEGTRY__CONST2
+%undef __SEGTRY_const2
+%undef __SEGTRY_CONST2
+%define __SEGTRY_%1  ; Ignores everything after the first whitespace in %1.
+%undef  segment
+%define segment segment  ; Use original meaning of the segment directive below to select segment.
+%ifdef __SEGTRY_unchanged
+%elifdef __SEGTRY_.text
+segment _TEXT
+%elifdef __SEGTRY_.TEXT
+segment _TEXT
+%elifdef __SEGTRY__text
+segment _TEXT
+%elifdef __SEGTRY__TEXT
+segment _TEXT
+%elifdef __SEGTRY_text
+segment _TEXT
+%elifdef __SEGTRY_TEXT
+segment _TEXT
+%elifdef __SEGTRY_.code
+segment _TEXT
+%elifdef __SEGTRY_.CODE
+segment _TEXT
+%elifdef __SEGTRY__code
+segment _TEXT
+%elifdef __SEGTRY__CODE
+segment _TEXT
+%elifdef __SEGTRY_code
+segment _TEXT
+%elifdef __SEGTRY_CODE
+segment _TEXT
+%elifdef __SEGTRY_.bss
+segment _BSS
+%elifdef __SEGTRY_.BSS
+segment _BSS
+%elifdef __SEGTRY__bss
+segment _BSS
+%elifdef __SEGTRY__BSS
+segment _BSS
+%elifdef __SEGTRY_bss
+segment _BSS
+%elifdef __SEGTRY_BSS
+segment _BSS
+%elifdef __SEGTRY_.stack
+segment STACK
+%elifdef __SEGTRY_.STACK
+segment STACK
+%elifdef __SEGTRY__stack
+segment STACK
+%elifdef __SEGTRY__STACK
+segment STACK
+%elifdef __SEGTRY_stack
+segment STACK
+%elifdef __SEGTRY_STACK
+segment STACK
+%elifdef __SEGTRY_.data
+segment _DATA
+%elifdef __SEGTRY_.DATA
+segment _DATA
+%elifdef __SEGTRY__data
+segment _DATA
+%elifdef __SEGTRY__DATA
+segment _DATA
+%elifdef __SEGTRY_data
+segment _DATA
+%elifdef __SEGTRY_DATA
+segment _DATA
+%elifdef __SEGTRY_.const
+segment CONST
+%elifdef __SEGTRY_.CONST
+segment CONST
+%elifdef __SEGTRY__const
+segment CONST
+%elifdef __SEGTRY__CONST
+segment CONST
+%elifdef __SEGTRY_const
+segment CONST
+%elifdef __SEGTRY_CONST
+segment CONST
+%elifdef __SEGTRY_.const2
+segment CONST2
+%elifdef __SEGTRY_.CONST2
+segment CONST2
+%elifdef __SEGTRY__const2
+segment CONST2
+%elifdef __SEGTRY__CONST2
+segment CONST2
+%elifdef __SEGTRY_const2
+segment CONST2
+%elifdef __SEGTRY_CONST2
+segment CONST2
+%else
+; %1 may also include segment attributes (e.g. class=CODE align=1), which
+; %nasm ignores with a warning if called again for the same segment.
+segment %1
+%endif
+%undef  segment
+%define segment __OBJ_SEGMENT__
+%endmacro
+
 );
 
 # Corresponding `wcc: owcc' flags:

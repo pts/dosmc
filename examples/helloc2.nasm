@@ -34,7 +34,8 @@ segment const align=1
 msg: db 'Hello, World!', 13, 10, '$'
 
 ; The name of the BSS segment must be .bss (starting with a dot, lower case)
-; for `nasm -f bin'.
+; for `nasm -f bin'. DOS .com compatibility mode allows alternative spellings
+; (e.g. _BSS) as well.
 ;
 ; Values in .bss are unintialized in DOS .com files, and DOS .com
 ; compatibility mode also keeps this.
