@@ -7,6 +7,20 @@
 #define NULL ((void *)0)  /* stdlib.h */
 #endif
 
+#define __PRAGMA(X) _Pragma(#X)
+
+/* Can be specified multiple times (and will be emitted once each for .c,
+ * and deduplicate for .nasm). Works with or without trailing semicolon.
+ * Works in both .c and .nasm source files.
+ *
+ * Example: __LINKER_FLAG(omit_cld)
+ *   to omit the cld instruction before calling the entry point.
+ * Example: __LINKER_FLAG(uninitialized_bss)
+ *   to keep _BSS uninitialized (rather than filling it with \x00.
+ */
+#define __LINKER_FLAG(name) extern int _linker_flag_##name; __PRAGMA(extref _linker_flag_##name)
+
+
 /* Writes a $-delimited string to stdout. You may want to create msg with
  * STRING_WITHOUT_NUL to save 1 byte.
  *

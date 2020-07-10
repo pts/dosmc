@@ -219,7 +219,9 @@ for my $srcfn (@sources) {
     $srcfnq =~ s@([\x00-\x1F\\\$"\x7F-\xFF])@ "\\x" . pack("H", $1) @ge;
     # TODO(pts): Port to Win32 with \ in the filename.
     die "$0: fatal: cannot write to: $tmpfn\n" if !print($tmpf
-        qq(bits 16\ncpu $nasm_cpu\n;uppercase\nsegment text\n%include "$srcfnq"\n));
+        qq(bits 16\ncpu $nasm_cpu\n;uppercase\nsegment text\n) .
+        qq(%define __LINKER_FLAG(name) extern __linker_flag_ %+ name\n) .
+        qq(%include "$srcfnq"\n));
     die "$0: fatal: cannot close: $tmpfn\n" if !close($tmpf);
     if ($PL eq "-pl") {
       push @nasm_cmd, "-E", $tmpfn;
@@ -346,6 +348,7 @@ sub is_complicated_8086_code($$$) {
   $result
 }
 
+my %LINKER_FLAG_OK = map { $_ => 1 } "omit_cld", "uninitialized_bss";
 my @SEGMENT_ORDER = qw(_TEXT CONST CONST2 _DATA _BSS);  # Constant, OpenWatcom wcc.
 my %SEGMENT_NAME_OK = map { $_ => 1 } @SEGMENT_ORDER;
 my %ASM_DATA_OP = (1 => "db", 2 => "dw", 4 => "dd", 8 => "dq");  # Constant, nasm.
@@ -635,6 +638,7 @@ sub link_executable($$@) {
   my @skipped_objfns;
   my $do_use_argc = 0;
   my $obji = 0;
+  my %lf;  # Linker flags.
   while (@_) {  # Next round.
     my $prev_obji = $obji;
     for my $objfn (@_) {
@@ -695,8 +699,20 @@ sub link_executable($$@) {
     last if $obji == $prev_obji or !%undefined_symbols;
     @_ = @skipped_objfns; @skipped_objfns = ();
   }
-  my @undefined_symbols = map { substr($_, 2) } sort keys %undefined_symbols;  # Strip "G\$" prefix.
+  my @undefined_symbols;
+  my @undefined_linker_flags;
+  for my $symbol (map { substr($_, 2) } sort keys %undefined_symbols) {  # Strip "G\$" prefix.
+    if ($symbol !~ s@\A__linker_flag_@@) {
+      push @undefined_symbols, $symbol;
+    } elsif (exists($LINKER_FLAG_OK{$symbol})) {
+      # Created by __LINKER_FLAG($symbol) in .c and .nasm files.
+      $lf{$symbol} = 1;
+    } else {
+      push @undefined_linker_flags, $symbol;
+    }
+  }
   die "$0: fatal: undefined symbols: @undefined_symbols\n" if @undefined_symbols;
+  die "$0: fatal: undefined linker flags: @undefined_linker_flags\n" if @undefined_linker_flags;
 
   my $entry_count = (defined($text_symbol_ofs{"G\$main_"}) + defined($text_symbol_ofs{"G\$_start_"}));
   die "$0: fatal: too many entry points (main functions)\n" if $entry_count > 1;
@@ -723,11 +739,13 @@ sub link_executable($$@) {
   my $does_entry_point_return = !defined($exit_code);  # TODO(pts): Smarter detection.
   my $is_data_used = !defined($exit_code);
   my $need_clear_ax = (defined($text_symbol_ofs{"G\$main_"}) and $do_use_argc);
-  my $do_clear_bss = $segment_sizes{_BSS} + ($need_clear_ax << 1) > 14;  # 14 == length($clear_bss_full).
+  my $do_clear_bss_with_code = (!$lf{uninitialized_bss} and $segment_sizes{_BSS} + ($need_clear_ax << 1) > 14);  # 14 == length($clear_bss_full).
+  my $need_clear_df = ($do_clear_bss_with_code or (!$lf{omit_cld} and $has_string_instructions and !(
+      defined($text_symbol_ofs{"G\$_start_"}) and substr($ledata{_TEXT}, $text_symbol_ofs{"G\$_start_"}, 1) =~ m@\A[\xFC\xFD]@  # cld or std.
+      )));
+
   # _DATA comes before _BSS in @SEGMENT_ORDER, move all (\0) bytes from _BSS to _DATA.
-  if (!$do_clear_bss) { $ledata{_DATA} .= "\0" x $segment_sizes{_BSS}; $segment_sizes{_DATA} += $segment_sizes{_BSS}; $segment_sizes{_BSS} = 0; }
-  my $need_clear_df = ($do_clear_bss or ($has_string_instructions and !(defined($text_symbol_ofs{"G\$_start_"}) and
-      substr($ledata{_TEXT}, $text_symbol_ofs{"G\$_start_"}, 1) =~ m@\A[\xFC\xFD]@)));  # cld or fld.
+  if (!$lf{uninitialized_bss} and !$do_clear_bss_with_code) { $ledata{_DATA} .= "\0" x $segment_sizes{_BSS}; $segment_sizes{_DATA} += $segment_sizes{_BSS}; $segment_sizes{_BSS} = 0; }
   for my $segment_name (@SEGMENT_ORDER) {
     die "$0: assert: segment size mismatch for $segment_name\n" if
         length($ledata{$segment_name}) != ($segment_name eq "_BSS" ? 0 : $segment_sizes{$segment_name});
@@ -822,7 +840,7 @@ times -(((bss_end-bss_start)+(data_end-data_start)+(code_end-code_start+0x100)+3
     print $exef qq($fullprog_code\n);
     print $exef qq(db 0x16  ; push ss\ndb 0x1f  ; pop ds\n) if $is_exe and $is_data_used;
     print $exef qq(cld\n) if $need_clear_df;
-    if ($do_clear_bss) {
+    if ($do_clear_bss_with_code) {
       print $exef qq(push es\npush ds\npop es\nmov di, bss_start\nmov cx, (stack-bss_start+1)>>1\nxor ax, ax\nrep stosw\npop es\n);  # clear_bss.
     } elsif ($need_clear_ax) {
       print $exef qq(db 0x31, 0xC0  ; xor ax, ax\n  ; argc=0);
@@ -853,7 +871,7 @@ times -(((bss_end-bss_start)+(data_end-data_start)+(code_end-code_start+0x100)+3
     $init_regs .= "\x16\x1F" if $is_exe and $is_data_used;  # push ss; pop ds
     $init_regs .= "\xFC" if $need_clear_df;  # String instructions (e.g. movsb, stosw) need df=0 (cld).
     # push ds;; pop es;; mov di, bss_start;; mov cx, (stack-bss_start+1)>>1;; xor ax, ax;; rep stosw;; pop es
-    my $clear_bss = $do_clear_bss ? pack("a4va1va5", "\x06\x1E\x07\xBF", 0, "\xB9", ($segment_sizes{_BSS} + 1) >> 1, "\x31\xC0\xF3\xAB\x07") :  # Affected by fixups below.
+    my $clear_bss = $do_clear_bss_with_code ? pack("a4va1va5", "\x06\x1E\x07\xBF", 0, "\xB9", ($segment_sizes{_BSS} + 1) >> 1, "\x31\xC0\xF3\xAB\x07") :  # Affected by fixups below.
         $need_clear_ax ? "\x31\xC0" : "";  # xor ax, ax  ; argc=0.
     # $call_main is affected by fixups below.
     my($call_main, $call_main_symbol, $call_main_ofs);
