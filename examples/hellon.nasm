@@ -4,7 +4,7 @@ __LINKER_FLAG(start_es_psp)
 
 ..start:  ; Either ..start: or _start_ or both works.
 _start_:
-mov ah, 9
+mov ah, 9  ; WRITE_TO_STDOUT.
 mov dx, msg
 int 0x21
 ret
