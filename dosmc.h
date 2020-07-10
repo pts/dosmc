@@ -17,6 +17,10 @@
  *   to omit the cld instruction before calling the entry point.
  * Example: __LINKER_FLAG(uninitialized_bss)
  *   to keep _BSS uninitialized (rather than filling it with \x00.
+ * Example: __LINKER_FLAG(start_es_psp)
+ *   to make es:0 point to the PSP (Program Segment Prefix) at the entry
+ *   point. Not enabled by default, because in the Watcom calling convention
+ *   functions can modify es any time without restoring it.
  */
 #define __LINKER_FLAG(name) extern int _linker_flag_##name; __PRAGMA(extref _linker_flag_##name)
 

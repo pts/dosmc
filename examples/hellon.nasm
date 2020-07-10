@@ -1,5 +1,6 @@
 __LINKER_FLAG(omit_cld)
 __LINKER_FLAG(uninitialized_bss)
+__LINKER_FLAG(start_es_psp)
 
 ;..start:  ; Either ..start: or _start_ works.
 _start_:

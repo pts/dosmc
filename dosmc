@@ -348,7 +348,7 @@ sub is_complicated_8086_code($$$) {
   $result
 }
 
-my %LINKER_FLAG_OK = map { $_ => 1 } "omit_cld", "uninitialized_bss";
+my %LINKER_FLAG_OK = map { $_ => 1 } qw(omit_cld uninitialized_bss start_es_psp);
 my @SEGMENT_ORDER = qw(_TEXT CONST CONST2 _DATA _BSS);  # Constant, OpenWatcom wcc.
 my %SEGMENT_NAME_OK = map { $_ => 1 } @SEGMENT_ORDER;
 my %ASM_DATA_OP = (1 => "db", 2 => "dw", 4 => "dd", 8 => "dq");  # Constant, nasm.
@@ -712,7 +712,7 @@ sub link_executable($$@) {
     }
   }
   die "$0: fatal: undefined symbols: @undefined_symbols\n" if @undefined_symbols;
-  die "$0: fatal: undefined linker flags: @undefined_linker_flags\n" if @undefined_linker_flags;
+  die "$0: fatal: unknown linker flags: @undefined_linker_flags\n" if @undefined_linker_flags;
 
   my $entry_count = (defined($text_symbol_ofs{"G\$main_"}) + defined($text_symbol_ofs{"G\$_start_"}));
   die "$0: fatal: too many entry points (main functions)\n" if $entry_count > 1;
@@ -843,9 +843,10 @@ times -(((bss_end-bss_start)+(data_end-data_start)+(code_end-code_start+0x100)+3
     if ($do_clear_bss_with_code) {  # $clear_bss.
       # .com startup: cs=ds=es=ss=PSP, ip=0x100, cs:0x100=first_file_byte.
       # .exe startup: ds=es=PSP, cs+ip+ss+sp are base+from_exe_header.
-      print $exef qq(push es\npush ds\npop es\n) if $is_exe;
+      print $exef qq(push es\n) if $is_exe and $lf{start_es_psp};
+      print $exef qq(push ds\npop es\n) if $is_exe;
       print $exef qq(mov di, bss_start\nmov cx, (stack-bss_start+1)>>1\nxor ax, ax\nrep stosw\n);
-      print $exef qq(pop es\n) if $is_exe;
+      print $exef qq(pop es\n) if $is_exe and $lf{start_es_psp};
     } elsif ($need_clear_ax) {
       print $exef qq(db 0x31, 0xC0  ; xor ax, ax\n  ; argc=0);
     }
@@ -876,9 +877,10 @@ times -(((bss_end-bss_start)+(data_end-data_start)+(code_end-code_start+0x100)+3
     $init_regs .= "\xFC" if $need_clear_df;  # String instructions (e.g. movsb, stosw) need df=0 (cld).
     # !! In wcc ABI, we can ruin es, so don't save+restore it.
     my $clear_bss = $do_clear_bss_with_code ? (
-        "\x06\x1E\x07" x !(!($is_exe)) .  # push es;; push ds;; pop es
+        "\x06" x !(!($is_exe and $lf{start_es_psp})) .  # push es
+        "\x1E\x07" x !(!($is_exe)) .  # push ds;; pop es
         pack("a1va1va4", "\xBF", 0, "\xB9", ($segment_sizes{_BSS} + 1) >> 1, "\x31\xC0\xF3\xAB") .  # Affected by fixups below. mov di, bss_start;; mov cx, (stack-bss_start+1)>>1;; xor ax, ax;; rep stosw
-        "\x07" x !(!($is_exe))) :  # pop es
+        "\x07" x !(!($is_exe and $lf{start_es_psp}))) :  # pop es
         $need_clear_ax ? "\x31\xC0" : "";  # xor ax, ax  ; argc=0.
     # $call_main is affected by fixups below.
     my($call_main, $call_main_symbol, $call_main_ofs);
@@ -939,7 +941,7 @@ times -(((bss_end-bss_start)+(data_end-data_start)+(code_end-code_start+0x100)+3
           0xffff, $after_text_vofs >> 4, $data_size + $segment_sizes{_BSS} + $stack_align_size + $stack_size, 0, 8, 0);
       print $exef $exe_header;
     }
-    substr($clear_bss, 1 + 3 * $is_exe, 2) = pack("v", $segment_vofs{_BSS}) if length($clear_bss) >= 6;
+    substr($clear_bss, 1 + ($is_exe ? 2 : 0) + (($is_exe and $lf{start_es_psp}) ? 1 : 0), 2) = pack("v", $segment_vofs{_BSS}) if length($clear_bss) >= 6;
     if (defined $call_main_ofs) {
       die "$0: assert: unknown entry point: $call_main_symbol\n" if !defined($symbol_vofs{$call_main_symbol});
       substr($call_main, $call_main_ofs, 2) = pack("v", $symbol_vofs{$call_main_symbol} - ($call_main_ofs + 2 + $segment_vofs{call_main}));

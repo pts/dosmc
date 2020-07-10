@@ -10,6 +10,8 @@
 
 #include <dosmc.h>
 
+__LINKER_FLAG(start_es_psp)
+
 /* Only with static, both get_str and the string literal will be optimized away. */
 static char *example_get_str(void) {
   return "LONG STRING";
