@@ -4,7 +4,7 @@
 ;
 ; DOS .com source file in NASM syntax, identical with `nasm -f bin' and dosmc:
 ;
-;   $ ./dosmc -mt examples/helloc.nasm  # Creates examples2/helloc.com .
+;   $ ./dosmc -mt examples/helloc.nasm  # Creates examples/helloc.com .
 ;   $ nasm -f bin -O9 -o examples/hellocb.com examples/helloc.nasm
 ;   $ cmp examples/helloc.com examples/hellocb.com  # Identical.
 ;

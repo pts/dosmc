@@ -28,12 +28,13 @@ eval '(exit $?0)' && eval 'PERL_BADLANG=x;PATH="$PATH:.";export PERL_BADLANG\
 # !! Make simple_nasm_exe.nasm work with the built-in linker (ds, ss, sp setup is unnecessary, remove that).
 # !! Add -bt=auto for using .com if it fits to 64 KiB of memory, otherwise using .exe. Also autodetect .bin for a single .nasm source file with non-0x100 org in the beginning.
 # !! Add -cl (static library is a concatenation of .obj files) and .lib input to link_executable().
+# !! Add autodetection of .asm files: .nasm vs .wasm input format (by SEGMENT, ASSUME etc.)
 #
 # !! Cleanup flag to remove .tmp files.
 # !! Add Perl script execution mode: `dosmc myscript.pl ...'.
 # !! Add build mode: `dosmc .'.
 # !! Allow .obj files from A86, give source example for section.
-# !! Allow .obj files from WASM, give source example for section.
+# !! doc: Allow .obj files from WASM, give source example for section.
 #
 
 BEGIN { $^W = 1 }
@@ -280,21 +281,24 @@ sub load_obj($$) {
       my $symbol_prefix = $type == 0xb6 ? $obj_symbol_prefix : "G\$";
       die "$0: fatal: $recname too short" if $size < 2;
       my $segment_idx = vec($data, 1, 8);
-      die "$0: fatal: unknown segment: $segment_idx\n" if !$segment_idx or $segment_idx >= @segment_names;
-      my $segment_name = $segment_names[$segment_idx];
-      for (my $i = 2; $i < $size; $i += 3) {
-        my $fsize = vec($data, $i++, 8);
-        die "$0: fatal: EOF in $recname entry\n" if $i + $fsize + 3 > $size;
-        my $symbol = $symbol_prefix . substr($data, $i, $fsize);
-        $i += $fsize;
-        my($ofs, $type) = unpack("vC", substr($data, $i, 3));
-        #print STDERR "info: $recname $segment_name $symbol $ofs $type\n";
-        # Also because we do not support parsing 2-byte type index.
-        die "$0: fatal: bad symbol type: symbol=$symbol type=$type\n" if $type != 0;
-        die "$0: fatal: duplicate symbol within obj: $symbol\n" if exists($symbol_ofs{$symbol});
-        $symbol_ofs{$symbol} = $ofs;
-        $text_symbol_ofs{$symbol} = $ofs if $segment_name eq "_TEXT";
-        push @{$segment_symbols{$segment_name}}, [$ofs, $symbol];
+      if ($segment_idx == 0) {  # 0: .wasm source with `PUBLIC ...', but label not defined. Ignore.
+      } else {
+        die "$0: fatal: unknown segment: $segment_idx\n" if !$segment_idx or $segment_idx >= @segment_names;
+        my $segment_name = $segment_names[$segment_idx];
+        for (my $i = 2; $i < $size; $i += 3) {
+          my $fsize = vec($data, $i++, 8);
+          die "$0: fatal: EOF in $recname entry\n" if $i + $fsize + 3 > $size;
+          my $symbol = $symbol_prefix . substr($data, $i, $fsize);
+          $i += $fsize;
+          my($ofs, $type) = unpack("vC", substr($data, $i, 3));
+          #print STDERR "info: $recname $segment_name $symbol $ofs $type\n";
+          # Also because we do not support parsing 2-byte type index.
+          die "$0: fatal: bad symbol type: symbol=$symbol type=$type\n" if $type != 0;
+          die "$0: fatal: duplicate symbol within obj: $symbol\n" if exists($symbol_ofs{$symbol});
+          $symbol_ofs{$symbol} = $ofs;
+          $text_symbol_ofs{$symbol} = $ofs if $segment_name eq "_TEXT";
+          push @{$segment_symbols{$segment_name}}, [$ofs, $symbol];
+        }
       }
     } elsif ($type == 0x91) {  # Long PUBDEF.
       die "$0: fatal: long PUBDEF not supported\n";
@@ -378,16 +382,21 @@ sub load_obj($$) {
         if (($b & 0xc1) == 0xc1) {
           die "$0: fatal: EOF in MODEND entry point\n" if $size < 2;
           $b = vec($data, 1, 8);
-          # $frame = 0; $target = 0;
-          die "$0: fatal: unsupported MODEND fix data: " . sprintf("0x%x", $b). "\n" if $b;
-          die "$0: fatal: EOF in MODEND datum\n" if $size < 4;
-          my $segment_idx = vec($data, 2, 8); my $segment_idx2 = vec($data, 3, 8);
-          die "$0: fatal: segment index mismatch in MODEND\n" if $segment_idx != $segment_idx2;
+          my $segment_idx;
+          if ($b == 0) {  # $frame = 0; $target = 0;
+            die "$0: fatal: bad MODEND size\n" if $size != 6;
+            $segment_idx = vec($data, 2, 8); my $segment_idx2 = vec($data, 3, 8);  # frame data, target data.
+            die "$0: fatal: segment index mismatch in MODEND\n" if $segment_idx != $segment_idx2;
+          } elsif ($b == 0x50) {  # .obj created by WASM. $frame = 5; $target = 0;
+            die "$0: fatal: bad MODEND size\n" if $size != 5;
+            $segment_idx = vec($data, 2, 8);  # target data.
+          } else {
+            die "$0: fatal: unsupported MODEND fix data: " . sprintf("0x%x", $b). "\n";
+          }
           die "$0: fatal: unknown segment: $segment_idx\n" if !$segment_idx or $segment_idx >= @segment_names;
           my $segment_name = $segment_names[$segment_idx];
           die "$0: fatal: expecting _TEXT in MODEND entry point\n" if $segment_name ne "_TEXT";
-          die "$0: fatal: EOF in MODEND target displacement\n" if $size < 6;
-          my $ofs = unpack("v", substr($data, 4, 2));
+          my $ofs = unpack("v", substr($data, -2, 2));
           my $symbol = "G\$_start_";
           die "$0: fatal: conflicting entry point symbol within obj: $objfn: " . substr($symbol, 2) . "\n" if
               exists($symbol_ofs{$symbol}) and !(exists($text_symbol_ofs{$symbol}) and $text_symbol_ofs{$symbol} == $ofs);
@@ -830,7 +839,7 @@ for my $arg (@ARGV) {
     push @defines, $arg;
   } elsif ($arg =~ m@\A-@) {
     push @wcc_args, $arg;
-  } elsif ($arg =~ m@[.](c|nasm|obj)\Z(?!\n)@) {
+  } elsif ($arg =~ m@[.](c|nasm|wasm|obj)\Z(?!\n)@) {
     push @sources, $arg;
   } else {
     die "$0: fatal: bad file extension for source file (must be .c or .obj): $arg\n";
@@ -963,6 +972,10 @@ push @wcc_cmd, $Q if length($Q);
 push @wcc_cmd, $PLL if length($PLL);
 push @wcc_cmd, "-bt=dos", "-ms", "-i=$MYDIR", "-s", "-os", "-W", "-w4", "-wx", "-we", "-wcd=202", $CPUF, "-fr", @wcc_args;
 my $wcc_cmd_size = @wcc_cmd;
+my @wasm_cmd = ('wasm', @d_args);
+push @wasm_cmd, $Q if length($Q);
+push @wasm_cmd, "-ms", "-i=$MYDIR", $CPUF;
+my $wasm_cmd_size = @wasm_cmd;
 my $nasm_cpu = $CPUF eq "-0" ? "8086" : substr($CPUF, 1) . "86";
 # TODO(pts): Copy some flags from @ARGV, pass as @nasm_flags here.
 my @nasm_cmd = ("nasm", @d_args, "-O9", "-f", $is_bin ? "bin" : "obj", "-w+orphan-labels");  # Default is `bits 16'.
@@ -1000,6 +1013,13 @@ for my $srcfn (@sources) {
       print STDERR "$0: fatal: nasm failed\n"; exit(3);
     }
     splice @nasm_cmd, $nasm_cmd_size;
+  } elsif ($ext eq "wasm") {
+    push @wasm_cmd, "-fo=$objfn" if $do_objfn_arg;
+    push @wasm_cmd, $srcfn;
+    if (run_command(@wasm_cmd)) {
+      print STDERR "$0: fatal: wasm failed\n"; exit(2);
+    }
+    splice @wasm_cmd, $wasm_cmd_size;
   } else {
     push @wcc_cmd, "-fo=$objfn" if $do_objfn_arg;
     push @wcc_cmd, $srcfn;
