@@ -170,6 +170,16 @@ define any symbols which are currently undefined, then it skips the entire
 .obj file. If there are undefined symbols in the end, then it retries the
 skipped .obj files, until all symbols become defined.
 
+dosmc doesn't have a build system (such as GNU Make or CMake), but it's easy
+use one if you write one in Perl. Just create a file named dosmcdir.pl next
+to your source files, and run `./dosmc <directory>' to get it invoked with
+the right $ENV{PATH}, @INC and @ARGV. $ARGV[0] will be the directory name.
+
+dosmc has basic support for extension commands written in Perl. Write your
+extension command as MYCMD.pl, save it to the same directory as dosmc's wcc
+(preferred) or to the same directory as the dosmc Perl script, and invoke it
+as `./dosmc MYCMD'. dosmc will sets $ENV{PATH}, @INC, @ARGV properly.
+
 Notes about maximum memory usage of DOS programs:
 
 * 16-bit DOS programs can address up to 1 MiB memory (in real mode, using

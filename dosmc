@@ -26,7 +26,6 @@ eval '(exit $?0)' && eval 'PERL_BADLANG=x;PATH="$PATH:.";export PERL_BADLANG\
 # !! Patch `END' to `END ...' in the -cw output. This is hard (needs .obj file modification to add an LPUBDEF) if there is no label for that already.
 # !! Add -cm to produce .nasm (from .obj, using db for instructions) which can be used next time to produce an identical executable. This is similar to -cn, but will need `nasm -f obj' and doesn't link .obj files together.
 # !! Cleanup flag to remove .tmp files.
-# !! Add build mode: `dosmc .'.
 # !! doc: http://nuclear.mutantstargoat.com/articles/retrocoding/dos01-setup/
 # !! Add instructions to build with wcl and debug info (produces larger .exe), and to use debugger.
 #
@@ -39,12 +38,13 @@ my $MYDIR = $0;
 die "$0: fatal: script directory not specified\n" if $MYDIR !~ s@/+[^/]+\Z(?!\n)@@;
 die "$0: fatal: bad current directory: $MYDIR\n" if $MYDIR =~ m@:@;  # $ENV{PATH} separator. TODO(pts): Port to Win32.
 
-if (!@ARGV or $ARGV[0] eq "-?" or $ARGV[0] eq "-h" or $ARGV[0] eq "--help") {
+if (!@ARGV or $ARGV[0] eq "-?" or $ARGV[0] eq "-h" or $ARGV[0] eq "--help" or $ARGV[0] eq "help") {
   die "$0: fatal: cannot redirect stdout\n" if !@ARGV and !open(STDOUT, ">&", \*STDERR);
   print "dosmc: C compiler and assembler to produce tiny DOS .exe and .com executables\n";
   print "This is free software, GNU GPL >=2.0. There is NO WARRANTY. Use at your risk.\n";
   print "Usage: $0 [<compiler-flag> ...] <source-file> [...]\n";
   print "Usage: $0 <perl-script> [...]\n";
+  print "Usage: $0 <directory> [...]  # Build with dosmcdir.pl\n";
   print "To compile DOS .exe, specify no flag. To compile DOS .com, specify -bt=com\n";
   print "Supported <source-file> types: .c, .nasm, .wasm, .asm, .obj, .lib\n";
   print "See details on https://github.com/pts/dosmc\n";
@@ -932,24 +932,28 @@ sub fix_path() {
   $ENV{PATH} = "$MYDIR/ow2bin:$ENV{PATH}";  # TODO(pts): Port to Win32.
 }
 
-sub find_perl_script($) {
-  my $script = $_[0];
+sub find_perl_script($;$) {
+  my ($script, $is_dir_ok) = @_;
+  # Only find explicitly specified directories, don't try $MYDIR.
+  if ($is_dir_ok and -d($script)) { return \$script }
+  # Don't try . if not explicitly specified, there may be a malicious script
+  # lying around in the source tree.
   my @prefixes = $script =~ m@\A(?:[.]/|[.][.]/|[/])@ ?  # TODO(pts): Port this to Win32.
       ("") : ("$MYDIR/ow2bin/", "$MYDIR/");
-  my $ffn;
   for my $prefix (@prefixes) {
     my $fn = $prefix . $script;
-    if (-f($fn)) { $ffn = $fn; last }
-    $fn .= ".pl"; if (-f($fn)) { $ffn = $fn; last }
+    if (-f($fn)) { return $fn }
+    #if ($is_dir_ok and -d(_)) { return \$fn }
+    $fn .= ".pl"; if (-f($fn)) { return $fn }
   }
-  die "$0: fatal: Perl script not found: $script\n" if !defined($ffn);
-  $ffn
+  die "$0: fatal: Perl script not found: $script\n";
 }
 
 # Can be called multiple times, result will be idempotent (on @INC etc.).
-# $_[0] is script filename (before autodetection), rest of @_ is @ARGV to pass.
-sub run_perl_script {
-  my $script = find_perl_script(shift(@_));
+# $_[0] is the final script filename, rest of @_ is @ARGV to pass.
+sub run_found_perl_script {
+  my $script = shift(@_);
+  die "$0: fatal: Perl script not found: $script\n" if !-f($script);
   my $script_dir = $script; die "$0: assert: script_dir\n" if $script_dir !~ s@/+[^/]+\Z(?!\n)@@;  # TODO(pts): Port this to Win32.
   my @old_argv = @ARGV; my @old_inc = @INC; my $old_path = $ENV{PATH};
   @ARGV = @_;
@@ -961,11 +965,39 @@ sub run_perl_script {
   $result
 }
 
+# Can be called multiple times, result will be idempotent (on @INC etc.).
+# $_[0] is script filename (before autodetection), rest of @_ is @ARGV to pass.
+sub run_perl_script {
+  unshift @_, find_perl_script(shift(@_));
+  goto &run_found_perl_script;
+}
+
+# Can be called multiple times, result will be idempotent (on @INC etc.).
+# $_[0] is script filename (before autodetection) or name of the directory
+# containing dosmcdir.pl, rest of @_ is @ARGV to pass.
+sub run_perl_script_or_dir {
+  my $script = find_perl_script(shift(@_), 1);
+  if (ref $script) {  # Found directory.
+    $script = $$script;
+    $script =~ s@/+.(?=/)@@g; $script =~ s@/+[.]\Z(?!\n)@@;
+    my $count = 16; my $pre_script = $script; my $try_script;
+    for (my $count = 32; $count > 0; --$count) {
+      $try_script = "$pre_script/dosmcdir.pl";
+      last if -f($try_script);
+      $try_script = undef; $pre_script .= "/..";  # TODO(pts): Port this to Win32.
+    }
+    die "$0: fatal: no Perl script dosmcdir.pl found up from: $script\n" if !defined($try_script);
+    unshift @_, $try_script, $script;
+  } else {
+    unshift @_, $script;
+  }
+  goto &run_found_perl_script;
+}
+
 # TODO(pts): Port this to Win32.
 if (@ARGV and $ARGV[0] !~ m@\A-@ and ($ARGV[0] =~ m@[.]p[lm]\Z(?!\n)@i or $ARGV[0] !~ m@[.][^./]+\Z(?!\n)@)) {
   fix_path();
-  run_perl_script(@ARGV);
-  exit;
+  run_perl_script_or_dir(@ARGV); exit;
 }
 
 # --- Compiler frontend (calls compiler, assembler and (embedded) linker).
@@ -980,6 +1012,7 @@ my @sources;
 my @wcc_args;
 my @defines;
 my $do_add_libc = 1;
+my $is_first_arg = 1;
 
 for my $arg (@ARGV) {
   if ($arg eq "--" or $arg eq "-" or !length($arg)) {
@@ -1023,11 +1056,17 @@ for my $arg (@ARGV) {
     $do_add_libc = 0;
   } elsif ($arg =~ m@\A-@) {
     push @wcc_args, $arg;
+  } elsif ($is_first_arg and -d($arg)) {
+    # To disable this (arbitrary Perl script execution by directory name),
+    # pass -q (or any other flag) as 1st arg.
+    fix_path();
+    run_perl_script_or_dir(@ARGV); exit;
   } elsif ($arg =~ m@[.](c|nasm|wasm|asm|obj|lib)\Z(?!\n)@) {
     push @sources, $arg;
   } else {
     die "$0: fatal: unknown file extension for source file (must be .c, .nasm, .wasm, .asm, .obj or .lib): $arg\n";
   }
+  $is_first_arg = 0;
 }
 $EXT = $EXEOUT =~ m@[.](?:com|COM)\Z(?!\n)@ ? "com" : "exe" if !length($EXT);
 die "$0: fatal: missing source file argument\n" if !@sources;
