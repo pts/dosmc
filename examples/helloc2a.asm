@@ -43,15 +43,15 @@ _BSS SEGMENT BYTE PUBLIC 'BSS'
   ORG 2000H
   skip2 LABEL BYTE
   ORG 2004H
-_BSS  ENDS
+_BSS ENDS
 
 CONST SEGMENT BYTE PUBLIC 'DATA'
   msg db 'Hello, World!', 13, 10, '$'
-CONST  ENDS
+CONST ENDS
 
 _DATA SEGMENT BYTE PUBLIC 'DATA'
   db 'InData', 0
-_DATA  ENDS
+_DATA ENDS
 
 CONST SEGMENT BYTE PUBLIC 'DATA'
   db 'InConst', 0
@@ -64,11 +64,11 @@ _TEXT SEGMENT BYTE PUBLIC 'CODE'
   ASSUME CS:_TEXT, DS:DGROUP, SS:DGROUP
   ;_start_:  ; Optional if entry is present.
   entry:  ; `END entry' below specifies the entry point.
-  mov  ah,9
-  mov  dx,offset msg
-  int  21H
-  mov  cx,offset skip2
+  mov ah, 9
+  mov dx, offset msg
+  int 21H
+  mov cx, offset skip2
   ret
-_TEXT  ENDS
+_TEXT ENDS
 
 END entry
