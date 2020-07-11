@@ -144,6 +144,11 @@ How much overhead does dosmc add?
   link time to avoid the `call _start_' and the `ret', the 34 bytes could be
   decreased to 30 bytes.
 
+The .com and .exe output files are deterministic (i.e. you get the same
+output file if you compile the same input files again), but .obj output
+isn't, because there is a timestamp in .obj files created by wcc (.c source)
+and WASM (.wasm and maybe .asm source).
+
 Notes about maximum memory usage of DOS programs:
 
 * 16-bit DOS programs can address up to 1 MiB memory (in real mode, using
