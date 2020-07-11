@@ -34,8 +34,6 @@ dosmc limitations:
   size of code + data + stack is ~63 KiB), and small for .exe executables
   (maximum size of code is ~64 KiB, maximum size of data + stack is ~64
   KiB).
-* Only a single .c source file is supported, no additional source files or
-  .obj or .lib files.
 * The supplied C library (libc) is very limited, currently it doesn't
   contain much more than getchar and putchar. For most functionality,
   inline assembly with DOS calls (int 21h) should be used.
@@ -55,6 +53,8 @@ dosmc limitations:
   (uses the DOS extender DOS/4GW) can be used.
 * malloc() or dynamic memory allocation isn't provided, you have to
   preallocate global arrays to emulate it.
+* Dynamic linking (.dll, .so, shared libraries) is not possible. This is an
+  OpenWatcom limitation for DOS targets.
 
 dosmc advantages over wcc and owcc in OpenWatcom:
 
@@ -97,6 +97,11 @@ Source file formats:
   FASM) can't create OMF .obj files, thus are incompatible with dosmc.
   NBASM uses a differnet sytnax, and we didn't managed to make it produce an
   .obj file, starting from examples/helloc2a.asm.
+* If the extension is .lib, then the .obj modules stored in the specified
+  static library are used as is for linking. `dosmc -cl' can be used to
+  create a .lib file. .lib files created by other compilers and linkers
+  will probably not work with dosmc. A .lib file is a concatenation of
+  .obj files, with an extra header.
 
 Program entry points for dosmc (choose any):
 
@@ -144,10 +149,10 @@ How much overhead does dosmc add?
   link time to avoid the `call _start_' and the `ret', the 34 bytes could be
   decreased to 30 bytes.
 
-The .com and .exe output files are deterministic (i.e. you get the same
-output file if you compile the same input files again), but .obj output
-isn't, because there is a timestamp in .obj files created by wcc (.c source)
-and WASM (.wasm and maybe .asm source).
+The .com, .exe, .lib and .bin output files are deterministic (i.e. you get
+the same output file if you compile the same input files again), but .obj
+output isn't, because there is a timestamp in .obj files created by wcc (.c
+source) and WASM (.wasm and maybe .asm source).
 
 Notes about maximum memory usage of DOS programs:
 
