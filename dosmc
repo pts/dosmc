@@ -920,6 +920,7 @@ my $CPUF = "-0";
 my @sources;
 my @wcc_args;
 my @defines;
+my $do_add_libc = 1;
 
 for my $arg (@ARGV) {
   if ($arg eq "--" or $arg eq "-" or !length($arg)) {
@@ -959,6 +960,8 @@ for my $arg (@ARGV) {
     die "$0: fatal: unsupported default calling convention: $arg\n";
   } elsif ($arg =~ m@\A-[DU]@) {
     push @defines, $arg;
+  } elsif ($arg eq "-nl") {  # wcc and wcl doesn't support this flag.
+    $do_add_libc = 0;
   } elsif ($arg =~ m@\A-@) {
     push @wcc_args, $arg;
   } elsif ($arg =~ m@[.](c|nasm|wasm|asm|obj|lib)\Z(?!\n)@) {
@@ -1335,6 +1338,10 @@ for my $srcfn (@sources) {
 
 if ($is_bin) {
 } elsif ($PL eq "-ce" or $PL eq "-cn") {
+  if ($do_add_libc and @objfns) {
+    push @objfns, "$MYDIR/dosmc.lib";
+    pop @objfns if !-f($objfns[-1]);
+  }
   my $is_nasm = $PL eq "-cn" ? 1 : 0;
   my $exefn = $is_nasm ? "$in1base.tmp.nasm" : $EXEOUT;
   print_command("//link", "-bt=$EXT", $CPUF, ($is_nasm ? "-cn" : "-ce"),  "-fe=$exefn", @objfns) if !length($Q);
