@@ -1,9 +1,9 @@
 dosmc: C compiler driver to produce tiny DOS .exe and .com executables
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-dosmc is a proof-of-concept C compiler driver for producing tiny DOS .exe
-and .com executables for the 8086 (16-bit) architecture. It uses the wcc C
-compiler in OpenWatcom V2, and it has its own C library (libc) and custom
-linker for tiny executable output.
+dosmc is a proof-of-concept C compiler and assembler driver for producing
+tiny DOS .exe and .com executables for the 8086 (16-bit) architecture. It
+uses the wcc C compiler in OpenWatcom V2, and it has its own C library
+(libc) and custom linker for tiny executable output.
 
 Usage:
 
@@ -68,9 +68,32 @@ dosmc advantages over wcc and owcc in OpenWatcom:
 It's possible to write inline assembly snippets in your C code using #pragma
 aux (see dosmc.h for examples) and `__asm { ... }'. However, it's not
 possible to write entire functions in assembly, because there is no syntax
-for that in the OpenWatcom C language. Using entire .asm files as sources
-doesn't work either with dosmc, because wcc cannot compile them (and wasm
-is not included in dosmc).
+for that in the OpenWatcom C language. Alternatively, you can use entire
+.asm files as sources (see some in the examples/ directory), in either NASM
+or WASM syntax.
+
+ow According to https://www.bttr-software.de/links/ , there
+aren't ma
+
+Source file formats:
+
+* If the extension is .c, then the bundled wcc (OpenWatcom C compiler) is
+  used to create the .obj file (in OMF format).
+* If the extension is .nasm, then the bundled NASM 0.99.06 is
+  used to create the .obj file.
+* If the extension is .wasm, then the bundled WASM (OpenWatcom assembler) is
+  used to create the .obj file.
+* If the extension is .asm, then dosmc looks at the first directive in
+  the file and autodetects it as .nasm or .wasm.
+* If the extension is .obj, then the file is used as is for linking.
+  According to https://www.bttr-software.de/links/ , there aren't many
+  assemblers which can create DOS OMF .obj files -- most (e.g. yasm and
+  fasm) can't, according to https://board.flatassembler.net/topic.php?t=7449
+  (2007), only NASM, WASM and LZASM can. Using NASM is recommended, because
+  it has a clean syntax and it's included and integrated very conveniently
+  (see examples/*.nasm) to dosmc. WASM is also integrated (see
+  examples/*.wasm), but it's less convenient to use because of the lots of
+  boilerplate.
 
 Program entry points for dosmc (choose any):
 
