@@ -548,6 +548,7 @@ sub link_executable($$$$@) {
   my %lf;  # Linker flags.
   my %unknown_lf;
   my $obji_base = -1;
+  my %duplicate_symbols;
   #print STDERR "info: first round\n";
   while (@_) {  # Next round.
     my @skipped_objs;
@@ -609,12 +610,15 @@ sub link_executable($$$$@) {
         my $fixupr = $fixupp{$segment_name};
         for my $pair (@{$obj_segment_symbols->{$segment_name}}) {
           my($ofs, $symbol) = @$pair;
-          die "$0: fatal: duplicate symbol across objs: $symbol\n" if exists($symbol_ofs{$symbol});
-          $ofs += $segment_ofs;
-          $symbol_ofs{$symbol} = $ofs;
-          $text_symbol_ofs{$symbol} = $ofs if $is_text;
-          push @$segment_symbolsr, [$ofs, $symbol];
-          delete $undefined_symbols{$symbol};
+          if (exists($symbol_ofs{$symbol})) {
+            $duplicate_symbols{$symbol} = 1;
+          } else {
+            $ofs += $segment_ofs;
+            $symbol_ofs{$symbol} = $ofs;
+            $text_symbol_ofs{$symbol} = $ofs if $is_text;
+            push @$segment_symbolsr, [$ofs, $symbol];
+            delete $undefined_symbols{$symbol};
+          }
         }
         my $datar = \$obj_ledata->{$segment_name};
         for my $fixup (@{$obj_fixupp->{$segment_name}}) {  # Apply fixups.
@@ -652,6 +656,15 @@ sub link_executable($$$$@) {
   if (%unknown_lf) {
     my @unknown_lf = sort keys %unknown_lf;
     die "$0: fatal: unknown linker flags: @unknown_lf\n";
+  }
+  if (%duplicate_symbols) {
+    my @duplicate_symbols = sort keys %duplicate_symbols;
+    my @nlu = grep { substr($_, 0, 2) ne "G\$" } @duplicate_symbols;
+    # It should be a global, because object-local symbols are
+    # prefixed with a unique $obj_symbol_prefix.
+    die "$0: fatal: found local duplicate symbols: @nlu\n" if @nlu;
+    my @lu = map { substr($_, 2) } @duplicate_symbols;
+    die "$0: fatal: duplicate symbols: @lu\n";
   }
 
   my $entry_count = (defined($text_symbol_ofs{"G\$main_"}) + defined($text_symbol_ofs{"G\$_start_"}));
