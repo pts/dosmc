@@ -154,6 +154,11 @@ the same output file if you compile the same input files again), but .obj
 output isn't, because there is a timestamp in .obj files created by wcc (.c
 source) and WASM (.wasm and maybe .asm source).
 
+dosmc has a optimizing linker: if it encouters an .obj file which doesn't
+define any symbols which are currently undefined, then it skips the entire
+.obj file. If there are undefined symbols in the end, then it retries the
+skipped .obj files, until all symbols become defined.
+
 Notes about maximum memory usage of DOS programs:
 
 * 16-bit DOS programs can address up to 1 MiB memory (in real mode, using
