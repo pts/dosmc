@@ -26,7 +26,6 @@ eval '(exit $?0)' && eval 'PERL_BADLANG=x;PATH="$PATH:.";export PERL_BADLANG\
 # !! Patch `END' to `END ...' in the -cw output. This is hard (needs .obj file modification to add an LPUBDEF) if there is no label for that already.
 # !! Add -cm to produce .nasm (from .obj, using db for instructions) which can be used next time to produce an identical executable. This is similar to -cn, but will need `nasm -f obj' and doesn't link .obj files together.
 # !! Cleanup flag to remove .tmp files.
-# !! Add Perl script execution mode: `dosmc myscript.pl ...'.
 # !! Add build mode: `dosmc .'.
 # !! doc: http://nuclear.mutantstargoat.com/articles/retrocoding/dos01-setup/
 # !! Add instructions to build with wcl and debug info (produces larger .exe), and to use debugger.
@@ -44,8 +43,10 @@ if (!@ARGV or $ARGV[0] eq "-?" or $ARGV[0] eq "-h" or $ARGV[0] eq "--help") {
   die "$0: fatal: cannot redirect stdout\n" if !@ARGV and !open(STDOUT, ">&", \*STDERR);
   print "dosmc: C compiler and assembler to produce tiny DOS .exe and .com executables\n";
   print "This is free software, GNU GPL >=2.0. There is NO WARRANTY. Use at your risk.\n";
-  print "Usage: $0 [<dosmc-flag> ...] [<wcc-flag> ...] <prog.c>\n";
+  print "Usage: $0 [<compiler-flag> ...] <source-file> [...]\n";
+  print "Usage: $0 <perl-script> [...]\n";
   print "To compile DOS .exe, specify no flag. To compile DOS .com, specify -bt=com\n";
+  print "Supported <source-file> types: .c, .nasm, .wasm, .asm, .obj, .lib\n";
   print "See details on https://github.com/pts/dosmc\n";
   exit(@ARGV ? 0 : 1);
 }
@@ -924,6 +925,51 @@ times -(((bss_end-bss_start)+(data_end-data_start)+(code_end-code_start+0x100)+3
 
 # --- End of linker, main code continues.
 
+# --- Perl script runner.
+
+sub fix_path() {
+  $ENV{PATH} = "/bin:/usr/bin" if !defined($ENV{PATH}) or !length($ENV{PATH});  # TODO(pts): Port to Win32.
+  $ENV{PATH} = "$MYDIR/ow2bin:$ENV{PATH}";  # TODO(pts): Port to Win32.
+}
+
+sub find_perl_script($) {
+  my $script = $_[0];
+  my @prefixes = $script =~ m@\A(?:[.]/|[.][.]/|[/])@ ?  # TODO(pts): Port this to Win32.
+      ("") : ("$MYDIR/ow2bin/", "$MYDIR/");
+  my $ffn;
+  for my $prefix (@prefixes) {
+    my $fn = $prefix . $script;
+    if (-f($fn)) { $ffn = $fn; last }
+    $fn .= ".pl"; if (-f($fn)) { $ffn = $fn; last }
+  }
+  die "$0: fatal: Perl script not found: $script\n" if !defined($ffn);
+  $ffn
+}
+
+# Can be called multiple times, result will be idempotent (on @INC etc.).
+# $_[0] is script filename (before autodetection), rest of @_ is @ARGV to pass.
+sub run_perl_script {
+  my $script = find_perl_script(shift(@_));
+  my $script_dir = $script; die "$0: assert: script_dir\n" if $script_dir !~ s@/+[^/]+\Z(?!\n)@@;  # TODO(pts): Port this to Win32.
+  my @old_argv = @ARGV; my @old_inc = @INC; my $old_path = $ENV{PATH};
+  @ARGV = @_;
+  unshift @INC, $script_dir, $MYDIR;  # Don't add ".", the script can add it if needed.
+  $ENV{PATH} = "$script_dir:$MYDIR:$ENV{PATH}";
+  my $result;
+  { local $0 = $script; $result = do($script); @ARGV = @old_argv; @INC = @old_inc; $ENV{PATH} = $old_path; die $@ if $@; }
+  die "$0: fatal: running Perl script $script: $!\n" if !defined($result) and $!;
+  $result
+}
+
+# TODO(pts): Port this to Win32.
+if (@ARGV and $ARGV[0] !~ m@\A-@ and ($ARGV[0] =~ m@[.]p[lm]\Z(?!\n)@i or $ARGV[0] !~ m@[.][^./]+\Z(?!\n)@)) {
+  fix_path();
+  run_perl_script(@ARGV);
+  exit;
+}
+
+# --- Compiler frontend (calls compiler, assembler and (embedded) linker).
+
 my $ARG = "";
 my $EXT = "";
 my $EXEOUT = "";
@@ -1018,8 +1064,7 @@ die "$0: fatal: multiple source file arguments with $PL\n" if !$is_multiple_sour
 
 delete $ENV{WATCOM};
 delete $ENV{INCLUDE};
-$ENV{PATH} = "/bin:/usr/bin" if !defined($ENV{PATH}) or !length($ENV{PATH});  # TODO(pts): Port to Win32.
-$ENV{PATH} = "$MYDIR/ow2bin:$ENV{PATH}";  # TODO(pts): Port to Win32.
+fix_path();
 
 # Quote string from Bourne-like shells.
 # !! Port this to Win32.
