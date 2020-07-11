@@ -60,7 +60,7 @@ CONST ENDS
 CONST2 SEGMENT BYTE PUBLIC 'DATA'  ; Required because DGROUP.
 CONST2 ENDS
 
-_TEXT SEGMENT BYTE PUBLIC 'TEXT'
+_TEXT SEGMENT BYTE PUBLIC 'CODE'
   ASSUME CS:_TEXT, DS:DGROUP, SS:DGROUP
   ;_start_:  ; Optional if entry is present.
   entry:  ; `END entry' below specifies the entry point.
