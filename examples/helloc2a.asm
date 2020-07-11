@@ -18,10 +18,17 @@
 ;   $ cmp examples/helloc2.exe examples/helloc2a.exe  # Identical.
 ;
 ; This file is similar to examples/helloc2w.wasm, but in addition to WASM,
-; it's compatible (and produces identical output) with older DOS assemblers
-; such as Microsoft MASM 3.00 (1984) and 4.00 (1985). The line breaks were
-; changed to CRLF, because LF didn't work for MASM 3.00 (bit it worked for
-; MASM 4.0).
+; it's compatible (and produces identical output) with older DOS assemblers:
+;
+; * Microsoft MASM 3.00 (1984): asm helloc2a helloc2a nul nul
+; * Microsoft MASM 4.00 (1985): asm helloc2a helloc2a nul nul
+; * A86 3.22 (1990): a86 helloc2a.asm helloc2a.obj
+; * A86 4.05 (2000): a86 helloc2a.asm helloc2a.obj
+;
+; See examples/helloc2l.asm for equivalent assembly code compatible with LZASM.
+;
+; The line breaks were changed to CRLF (\r\n), because LF (\n) didn't work
+; for MASM 3.00 (bit it worked for MASM 4.0).
 ;
 ; Use the PSP to fetch command-line arguments (they start at PSP+0x80).
 ; For .com files, the PSP is at cs:0 == ds:0 == es:0 == ss:0.
