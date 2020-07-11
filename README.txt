@@ -1,9 +1,10 @@
-dosmc: C compiler driver to produce tiny DOS .exe and .com executables
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-dosmc is a proof-of-concept C compiler and assembler driver for producing
-tiny DOS .exe and .com executables for the 8086 (16-bit) architecture. It
-uses the wcc C compiler in OpenWatcom V2, and it has its own C library
-(libc) and custom linker for tiny executable output.
+dosmc: C compiler and assembler to produce tiny DOS .exe and .com executables
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+dosmc is a C compiler, assembler, linker and librarian for producing tiny
+DOS .exe and .com executables for the 8086 (16-bit) architecture. It
+contains and uses the wcc C compiler in OpenWatcom V2 and also NASM, and it
+has its own C library (libc) and custom optimizing linker for tiny
+executable output.
 
 Usage:
 
@@ -17,6 +18,14 @@ To try it, run `dosbox examples' (without the quotes), and within the DOSBox
 window, run prog.exe or prog.com . The expected output is `ZYfghiHello!'
 (without the quotes).
 
+dosmc is an acronym for Deterministic Optimizing Small Model Compiler, where
+``small model'' signifies the 16-bit pointer size and the resulting 64 KiB
+memory limits (of the executable). The prefix DOS also refers to the
+target system (MS-DOS and compatible, including DOSBox and FreeDOS).
+
+dosmc is a cross-compiler: you can run it on a modern (32-bit or 64-bit)
+host system to produce 16-bit DOS executables.
+
 If you want to write tiny DOS .exe and .com executables in assembly instead,
 see http://github.com/pts/pts-nasm-fullprog
 
@@ -25,8 +34,10 @@ http://github.com/pts/pts-xtiny
 
 dosmc limitations:
 
-* Build system must be Linux i386 or amd64. (It's possible to make it work
-  on other Unix systems on which wcc is available.)
+* Host build system must be Linux i386 or amd64. (It's possible to make it
+  work on other Unix systems on which wcc is available.) Porting to FreeBSD
+  and Windows should be easy, and porting to macOS could be achieved by
+  creating a Docker image of the Linux port.
 * It depends on Perl (standard packages only).
 * It depends on the wcc C compiler in OpenWatcom V2.
 * Target is DOS 8086 (16-bit) .exe or DOS 8086 (16-bit) .com.

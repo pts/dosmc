@@ -6,7 +6,7 @@ eval '(exit $?0)' && eval 'PERL_BADLANG=x;PATH="$PATH:.";export PERL_BADLANG\
 +push@INC,'.';$0=~/(.*)/s;do(index($1,"/")<0?"./$1":$1);die$@if$@__END__+if 0
 ;#Don't touch/remove lines 1--7: http://www.inf.bme.hu/~pts/Magic.Perl.Header
 #
-# dosmc: C compiler driver to produce tiny DOS .exe and .com executables
+# dosmc: C compiler and assembler to produce tiny DOS .exe and .com executables
 # by pts@fazekas.hu at Thu Jun 25 00:59:56 CEST 2020
 #
 # TODOs:
@@ -42,7 +42,7 @@ die "$0: fatal: bad current directory: $MYDIR\n" if $MYDIR =~ m@:@;  # $ENV{PATH
 
 if (!@ARGV or $ARGV[0] eq "-?" or $ARGV[0] eq "-h" or $ARGV[0] eq "--help") {
   die "$0: fatal: cannot redirect stdout\n" if !@ARGV and !open(STDOUT, ">&", \*STDERR);
-  print "dosmc: C compiler driver to produce tiny DOS .exe and .com executables\n";
+  print "dosmc: C compiler and assembler to produce tiny DOS .exe and .com executables\n";
   print "This is free software, GNU GPL >=2.0. There is NO WARRANTY. Use at your risk.\n";
   print "Usage: $0 [<dosmc-flag> ...] [<wcc-flag> ...] <prog.c>\n";
   print "To compile DOS .exe, specify no flag. To compile DOS .com, specify -bt=com\n";
