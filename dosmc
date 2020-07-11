@@ -23,7 +23,6 @@ eval '(exit $?0)' && eval 'PERL_BADLANG=x;PATH="$PATH:.";export PERL_BADLANG\
 # !! Remove `push dx' and `pop dx' (and other register operations) from examples/hello.com.
 # !! Make simple_nasm_exe.nasm work with the built-in linker (ds, ss, sp setup is unnecessary, remove that).
 # !! Add -bt=auto for using .com if it fits to 64 KiB of memory, otherwise using .exe. Also autodetect .bin for a single .nasm source file with non-0x100 org in the beginning.
-# !! Add .lib input to link_executable().
 # !! Patch `END' to `END ...' in the -cw output. This is hard (needs .obj file modification to add an LPUBDEF) if there is no label for that already.
 # !! Add -cm to produce .nasm (from .obj, using db for instructions) which can be used next time to produce an identical executable. This is similar to -cn, but will need `nasm -f obj' and doesn't link .obj files together.
 #
@@ -203,7 +202,8 @@ sub emit_nasm_segment($$$$$$) {
 
 # OMF .obj record types to keep in .lib files.
 my %LIB_RECORD_TYPES = map { $_ => 1 } 0x96, 0x98, 0xa0, 0x90, 0xb6, 0x8c, 0xb4, 0x9c, 0x8a;
-my %LIB_UNSUPPORTED_RECORD_TYPES = map { $_ => 1 } 0xa1, 0x91, 0xb7, 0xb5, 0x9d, 0x8b;
+my %LIB_OMITTED_RECORD_TYPES = map { $_ => 1 } 0x80, 0x82, 0x88, 0x9a;
+my %LIB_DISALLOWED_RECORD_TYPES = map { $_ => 1 } 0xa1, 0x91, 0xb7, 0xb5, 0x9d, 0x8b;
 my $empty_lheadr = "\x82\x02\x00\x00\x7c";
 
 # Copies OMF .obj file from one file to the other, keeping only known
@@ -224,9 +224,11 @@ sub filter_obj_to_lib($$) {
     die "$0: fatal: EOF in obj record header\n" if (read($f, $data, $size, 3) or 0) != $size;
     if (exists($LIB_RECORD_TYPES{$type})) {
       print $libf $data;
-    } elsif (exists($LIB_UNSUPPORTED_RECORD_TYPES{$type})) {
-      my $ftype = sprintf("0x02x", $type);
-      die "$0: fatal: unsupported obj record for lib: $ftype\n";
+    } elsif (exists($LIB_OMITTED_RECORD_TYPES{$type})) {
+    } elsif (exists($LIB_DISALLOWED_RECORD_TYPES{$type})) {
+      die sprintf("%s: fatal: disallowed obj record type: type=0x%x size=%d\n", $0, $type, $size - 1);
+    } else {
+      die sprintf("%s: fatal: unsupported obj record type: type=0x%x size=%d\n", $0, $type, $size - 1);
     }
     # --$size; substr($data, -1) = "";  # Ignore checksum.
     last if $type == 0x8a;  # MODEND.
@@ -254,11 +256,20 @@ sub build_static_library($@) {
   if ($@) { print STDERR $@; exit(8); }
 }
 
-# Loads an OMF .obj file. This function may misbehave for .obj files not created
-# by (wcc or nasm) invoked by dosmc.
+# Loads an OMF .obj file or a .lib file. This function may misbehave for
+# .obj and .lib files not created by (wcc, nasm or wasm) invoked by dosmc. However,
+# .obj output of other assemblers may work, see examples/helloc2*.asm for examples.
 # Based on: https://pierrelib.pagesperso-orange.fr/exec_formats/OMF_v1.1.pdf
 sub load_obj($$) {
-  my($objfn, $obj_symbol_prefix) = @_;
+  my($objfn, $objli) = @_;
+  my @objs;  # Result. ([\%undefined_symbols, \%segment_symbols, \%ledata, \%segment_sizes, \%fixupp, $has_string_instructions], ...).
+  my $f;  # Of OMF .obj format, typically created by wcc or `nasm -f obj'.
+  my $had_lheadr = 0;
+  my $is_just_after_modend = 0;
+  eval {
+  die "$0: fatal: cannot open obj or lib file for reading: $objfn\n" if !open($f, "<", $objfn);
+  while (1) {  # Read next module (.obj within .lib).
+  my $obj_symbol_prefix = "O$objli\$"; ++$objli;
   my @lnames = ("-LN0");
   my %segment_sizes;
   my @segment_names = ("-SN");
@@ -270,12 +281,13 @@ sub load_obj($$) {
   my %fixupp = map { $_ => [] } @SEGMENT_ORDER;  # $segment_name => [[$endofs, $ofs, $ltypem, $symbol], ...].
   my $has_string_instructions = 0;
   my($last_segment_name, $last_ofs);
-  my $f;  # Of OMF .obj format, typically created by wcc or `nasm -f obj'.
-  eval {
-  die "$0: fatal: cannot open obj file for reading: $objfn\n" if !open($f, "<", $objfn);
-  while (1) {
+  while (1) {  # Read next .obj record.
     my $data;
-    die "$0: fatal: EOF in obj record header\n" if (read($f, $data, 3) or 0) != 3;
+    if ((read($f, $data, 3) or 0) != 3) {
+      last if $is_just_after_modend;
+      die "$0: fatal: EOF in obj record header\n";
+    }
+    $is_just_after_modend = 0;
     my($type, $size) = unpack("Cv", $data);
     die "$0: fatal: empty obj record\n" if !$size;
     #printf STDERR "info: RECORD 0x%x %d\n", $type, $size;
@@ -304,6 +316,7 @@ sub load_obj($$) {
       $segment_name = "TEXT" if $segment_name eq "CODE";
       substr($segment_name, 0, 0) = "_" if $segment_name !~ m@\ACONST@;
       die "$0: fatal: unsupported segment: $segment_name\n" if !$SEGMENT_NAME_OK{$segment_name};
+      #print STDERR "info: SEGDEF $segment_name\n";
       # Example alternative spellings: .bss and _BSS.
       die "$0: fatal: duplicate segment (maybe alternative spellings?): $segment_name\n" if exists($segment_sizes{$segment_name});
       $segment_sizes{$segment_name} = $segment_size;
@@ -469,12 +482,14 @@ sub load_obj($$) {
           die "$0: fatal: unsupported MODEND mattr: " . sprintf("0x%x", $b). "\n";
         }
       }
-      last;
+      last
     } elsif ($type == 0x8b) {  # Long MODEND.
       die "$0: fatal: long MODEND not supported\n";
     # Maintenance note: If useful action is added for a new $type here, also
     # add the $type value to %LIB_RECORD_TYPES.
     } elsif ($type == 0x80) {  # THEADR. Also omit from .lib files.
+    } elsif ($type == 0x82) {  # LHEADR. Also omit from .lib files. Present at the beginning of .lib files created by build_static_library.
+      $had_lheadr = 1;
     } elsif ($type == 0x88) {  # COMENT. Also omit from .lib files.
     } elsif ($type == 0x9a) {  # GRPDEF. Also omit from .lib files.
     } else {
@@ -482,11 +497,8 @@ sub load_obj($$) {
       die sprintf("%s: fatal: unsupported obj record type: type=0x%x size=%d\n", $0, $type, $size);
     }
     $last_segment_name = $last_ofs = undef if $type != 0xa0 and $type != 0xa1 and $type != 0x9c;
-  }
-  };  # End of eval block.
-  close($f) if $f;
-  die $@ if $@;
-  # This should be done for each input .obj files.
+  }  # .obj record.
+  last if $is_just_after_modend;
   my $code_type = is_complicated_8086_code($ledata{_TEXT}, $fixupp{_TEXT}, $segment_symbols{_TEXT});
   if ($code_type) {  # Complicated.
     $has_string_instructions = 1 if $ledata{_TEXT} =~ m@$STR_INST_80286_RE@o;  # Conservative.
@@ -500,7 +512,6 @@ sub load_obj($$) {
     die "$0: assert: segment size mismatch for $segment_name\n" if
         length($ledata{$segment_name}) != $size;
   }
-
   my %undefined_symbols = map { $_ => 1 } @extdef;
   delete $undefined_symbols{$extdef[0]};
   for my $symbol (keys %symbol_ofs) {
@@ -508,7 +519,14 @@ sub load_obj($$) {
   }
   my @nlu = grep { substr($_, 0, 2) ne "G\$" } sort keys %undefined_symbols;
   die "$0: fatal: found local undefined symbols in $objfn: @nlu\n" if @nlu;
-  \%undefined_symbols, \%segment_symbols, \%ledata, \%segment_sizes, \%fixupp, $has_string_instructions
+  push @objs, [\%undefined_symbols, \%segment_symbols, \%ledata, \%segment_sizes, \%fixupp, $has_string_instructions];
+  last if !$had_lheadr;
+  $is_just_after_modend = 1;
+  }  # Module (.obj).
+  };  # End of eval block.
+  close($f) if $f;
+  die $@ if $@;
+  @objs
 }
 
 sub link_executable($$$$@) {
@@ -523,18 +541,43 @@ sub link_executable($$$$@) {
   my %fixupp = map { $_ => [] } @SEGMENT_ORDER;  # $segment_name => [[$endofs, $ofs, $ltypem, $symbol], ...].
   my %segment_sizes = map { $_ => 0 } @SEGMENT_ORDER;  # $segment_name => $byte_size.
   my $has_string_instructions = 0;
-  my @skipped_objfns;
   my $do_use_argc = 0;
-  my $obji = 0;
+  my @objs;
+  my $objfni = 0;
+  my $objli = 1;
   my %lf;  # Linker flags.
+  my %unknown_lf;
+  my $obji_base = -1;
+  #print STDERR "info: first round\n";
   while (@_) {  # Next round.
-    my $prev_obji = $obji;
-    for my $objfn (@_) {
-      ++$obji;
-      my $obj_symbol_prefix = "O$obji\$";
-      my($obj_undefined_symbols, $obj_segment_symbols, $obj_ledata, $obj_segment_sizes, $obj_fixupp, $obj_has_string_instructions) = load_obj($objfn, $obj_symbol_prefix);
-      if ($obji > 1) {
-        my $has_new_symbol = $obji == 0;
+    my @skipped_objs;
+    my $skipped_objs_base = 0;
+    my $obji = 0;
+    my $used_objs_base = 0;
+    my $obji_base = 0;
+    while (1) {  # Process next .obj within this round.
+      if ($obji == @objs) {
+        last if $objfni == @_;
+        my $load_obj_count = @objs;
+        push @objs, load_obj($_[$objfni++], $objli), undef;
+        $load_obj_count = @objs - $load_obj_count;
+        $objli += $load_obj_count;
+        #print STDERR "info: loaded @{[$load_obj_count-1]} objs from $_[$objfni-1]\n";
+      }
+      my $obj = $objs[$obji++];
+      if (!defined($obj)) {  # Separates input files.
+        my $skipped_objc = @skipped_objs - $skipped_objs_base;
+        if ($skipped_objc and $used_objs_base) {  # Same input file (usually .lib) had skipped and non-skipped objs.
+          #print STDERR "info: restart half-round\n";
+          splice @objs, $obji_base, @objs - $obji_base, splice(@skipped_objs, $skipped_objs_base, $skipped_objc), undef;
+          $obji = $obji_base; $used_objs_base = 0; next  # Do another half-round using objs from the same .lib file.
+        }
+        #print STDERR "info: next input\n";
+        push @skipped_objs, undef; $skipped_objs_base = @skipped_objs; $used_objs_base = 0; $obji_base = $obji; next;
+      }
+      my($obj_undefined_symbols, $obj_segment_symbols, $obj_ledata, $obj_segment_sizes, $obj_fixupp, $obj_has_string_instructions) = @$obj;
+      if ($obji > 1 or $objfni > 1) {  # Check if this .obj has any new symbols.
+        my $has_new_symbol = 0;
         for my $segment_name (@SEGMENT_ORDER) {
           for my $pair (@{$obj_segment_symbols->{$segment_name}}) {
             my($ofs, $symbol) = @$pair;
@@ -543,11 +586,13 @@ sub link_executable($$$$@) {
           last if $has_new_symbol;
         }
         if (!$has_new_symbol) {  # Skip an .obj file if it doesn't define any new symbols.
-          --$obji;
-          push @skipped_objfns, $objfn;
+          #print STDERR "info: skipped obj\n";
+          push @skipped_objs, $obj;
           next;
         }
       }
+      #print STDERR "info: used obj\n";
+      ++$used_objs_base;
       # Helpfully added by wcc if there is main(...) with nonzero arguments.
       $do_use_argc = 1 if exists($obj_undefined_symbols->{"G\$__argc"});
       delete $obj_undefined_symbols->{"G\$__argc"};
@@ -580,28 +625,34 @@ sub link_executable($$$$@) {
         $ledata{$segment_name} .= $$datar;
         $segment_sizes{$segment_name} += $obj_segment_sizes->{$segment_name};
       }
-      for my $symbol (keys %$obj_undefined_symbols) {
-        $undefined_symbols{$symbol} = 1 if !exists($symbol_ofs{$symbol});
+      for my $symbol (sort keys %$obj_undefined_symbols) {
+        if ($symbol =~ s@\AG\$__LINKER_FLAG_@@i) {  # Created by __LINKER_FLAG($symbol) in .c and .nasm files.
+          $symbol = lc($symbol);  # Microsoft MASM 4.0 creates all symbols in uppercase.
+          if (exists($LINKER_FLAG_OK{$symbol})) {
+            $lf{$symbol} = 1;
+          } else {
+            $unknown_lf{$symbol} = 1;
+          }
+        } else {
+          $undefined_symbols{$symbol} = 1 if !exists($symbol_ofs{$symbol});
+        }
       }
     }
-    last if $obji == $prev_obji or !%undefined_symbols;
-    @_ = @skipped_objfns; @skipped_objfns = ();
+    last if @skipped_objs == @objs or !%undefined_symbols;
+    @objs = @skipped_objs;
+    #print STDERR "info: next round\n";
   }
-  my @undefined_symbols;
-  my @undefined_linker_flags;
-  for my $symbol (map { substr($_, 2) } sort keys %undefined_symbols) {  # Strip "G\$" prefix.
-    if ($symbol !~ s@\A__LINKER_FLAG_@@i) {
-      push @undefined_symbols, $symbol;
-    } elsif (exists($LINKER_FLAG_OK{lc($symbol)})) {
-      # Microsoft MASM 4.0 creates all symbols in uppercase.
-      # Created by __LINKER_FLAG($symbol) in .c and .nasm files.
-      $lf{lc($symbol)} = 1;
-    } else {
-      push @undefined_linker_flags, $symbol;
-    }
+  if (%undefined_symbols) {
+    my @undefined_symbols = sort keys %undefined_symbols;
+    my @nlu = grep { substr($_, 0, 2) ne "G\$" } @undefined_symbols;
+    die "$0: fatal: found local undefined symbols: @nlu\n" if @nlu;
+    my @lu = map { substr($_, 2) } @undefined_symbols;
+    die "$0: fatal: undefined symbols: @lu\n";
   }
-  die "$0: fatal: undefined symbols: @undefined_symbols\n" if @undefined_symbols;
-  die "$0: fatal: unknown linker flags: @undefined_linker_flags\n" if @undefined_linker_flags;
+  if (%unknown_lf) {
+    my @unknown_lf = sort keys %unknown_lf;
+    die "$0: fatal: unknown linker flags: @unknown_lf\n";
+  }
 
   my $entry_count = (defined($text_symbol_ofs{"G\$main_"}) + defined($text_symbol_ofs{"G\$_start_"}));
   die "$0: fatal: too many entry points (main functions)\n" if $entry_count > 1;
@@ -910,10 +961,10 @@ for my $arg (@ARGV) {
     push @defines, $arg;
   } elsif ($arg =~ m@\A-@) {
     push @wcc_args, $arg;
-  } elsif ($arg =~ m@[.](c|nasm|wasm|asm|obj)\Z(?!\n)@) {
+  } elsif ($arg =~ m@[.](c|nasm|wasm|asm|obj|lib)\Z(?!\n)@) {
     push @sources, $arg;
   } else {
-    die "$0: fatal: bad file extension for source file (must be .c or .obj): $arg\n";
+    die "$0: fatal: unknown file extension for source file (must be .c, .nasm, .wasm, .asm, .obj or .lib): $arg\n";
   }
 }
 $EXT = $EXEOUT =~ m@[.](?:com|COM)\Z(?!\n)@ ? "com" : "exe" if !length($EXT);
@@ -1239,7 +1290,7 @@ for my $srcfn (@sources) {
   my $ext = $srcbase =~ s@[.]([^./]+)\Z(?!\n)@@s ? $1 : "";  # TODO(pts): Port to Win32.
   $ext = detect_asm($srcfn) if $ext eq "asm";
   die "$0: fatal: .$ext source incompatible with -bt=bin: $srcfn\n" if $is_bin and $ext ne "nasm";
-  if ($ext eq "obj") { push @objfns, $srcfn; next }
+  if ($ext eq "obj" or $ext eq "lib") { push @objfns, $srcfn; next }
   my $objfn = defined($forced_objfn) ? $forced_objfn : $is_bin ? "$srcbase.bin" : $PL eq "-c" ? "$srcbase.obj" : "$srcbase.tmp.obj";
   push @objfns, $objfn;
   if ($ext eq "nasm") {
