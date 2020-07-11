@@ -25,11 +25,11 @@ eval '(exit $?0)' && eval 'PERL_BADLANG=x;PATH="$PATH:.";export PERL_BADLANG\
 # !! Add -bt=auto for using .com if it fits to 64 KiB of memory, otherwise using .exe. Also autodetect .bin for a single .nasm source file with non-0x100 org in the beginning.
 # !! Patch `END' to `END ...' in the -cw output. This is hard (needs .obj file modification to add an LPUBDEF) if there is no label for that already.
 # !! Add -cm to produce .nasm (from .obj, using db for instructions) which can be used next time to produce an identical executable. This is similar to -cn, but will need `nasm -f obj' and doesn't link .obj files together.
-#
 # !! Cleanup flag to remove .tmp files.
 # !! Add Perl script execution mode: `dosmc myscript.pl ...'.
 # !! Add build mode: `dosmc .'.
 # !! doc: http://nuclear.mutantstargoat.com/articles/retrocoding/dos01-setup/
+# !! Add instructions to build with wcl and debug info (produces larger .exe), and to use debugger.
 #
 
 BEGIN { $^W = 1 }
