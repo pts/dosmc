@@ -23,8 +23,9 @@ eval '(exit $?0)' && eval 'PERL_BADLANG=x;PATH="$PATH:.";export PERL_BADLANG\
 # !! Remove `push dx' and `pop dx' (and other register operations) from examples/hello.com.
 # !! Make simple_nasm_exe.nasm work with the built-in linker (ds, ss, sp setup is unnecessary, remove that).
 # !! Add -bt=auto for using .com if it fits to 64 KiB of memory, otherwise using .exe. Also autodetect .bin for a single .nasm source file with non-0x100 org in the beginning.
-# !! Add -cl (static library is a concatenation of .obj files) and .lib input to link_executable().
+# !! Add .lib input to link_executable().
 # !! Patch `END' to `END ...' in the -cw output. This is hard (needs .obj file modification to add an LPUBDEF) if there is no label for that already.
+# !! Add -cm to produce .nasm (from .obj, using db for instructions) which can be used next time to produce an identical executable. This is similar to -cn, but will need `nasm -f obj' and doesn't link .obj files together.
 #
 # !! Cleanup flag to remove .tmp files.
 # !! Add Perl script execution mode: `dosmc myscript.pl ...'.
@@ -200,7 +201,60 @@ sub emit_nasm_segment($$$$$$) {
   $chunk_sub->($size) if $size > $i;
 }
 
-# Load OMF .obj file. This function may misbehave for .obj files not created
+# OMF .obj record types to keep in .lib files.
+my %LIB_RECORD_TYPES = map { $_ => 1 } 0x96, 0x98, 0xa0, 0x90, 0xb6, 0x8c, 0xb4, 0x9c, 0x8a;
+my %LIB_UNSUPPORTED_RECORD_TYPES = map { $_ => 1 } 0xa1, 0x91, 0xb7, 0xb5, 0x9d, 0x8b;
+my $empty_lheadr = "\x82\x02\x00\x00\x7c";
+
+# Copies OMF .obj file from one file to the other, keeping only known
+# records, and ensuring deterministic output by removing records with
+# timestamp (e.g. COMENT 0xE9 -- Borland dependency).
+sub filter_obj_to_lib($$) {
+  my($objfn, $libf) = @_;
+  my $f;  # Of OMF .obj format, typically created by wcc or `nasm -f obj'.
+  my $type = -1;
+  eval {
+  die "$0: fatal: cannot open obj file for reading: $objfn\n" if !open($f, "<", $objfn);
+  while (1) {
+    my($data, $size);
+    die "$0: fatal: EOF in obj record header\n" if (read($f, $data, 3) or 0) != 3;
+    ($type, $size) = unpack("Cv", $data);
+    die "$0: fatal: empty obj record\n" if !$size;
+    #printf STDERR "info: RECORD 0x%x %d\n", $type, $size;
+    die "$0: fatal: EOF in obj record header\n" if (read($f, $data, $size, 3) or 0) != $size;
+    if (exists($LIB_RECORD_TYPES{$type})) {
+      print $libf $data;
+    } elsif (exists($LIB_UNSUPPORTED_RECORD_TYPES{$type})) {
+      my $ftype = sprintf("0x02x", $type);
+      die "$0: fatal: unsupported obj record for lib: $ftype\n";
+    }
+    # --$size; substr($data, -1) = "";  # Ignore checksum.
+    last if $type == 0x8a;  # MODEND.
+  }
+  };  # End of eval block.
+  close($f) if $f;
+  die $@ if $@;
+  print $libf "\x8a\x02\x00\x00\x74" if $type != 0x8a and $type >= 0;  # Simulate MODEND.
+}
+
+sub build_static_library($@) {
+  my $libfn = shift(@_);  # @_ contains @objfns.
+  my $libf;
+  eval {
+  die "$0: fatal: cannot open for writing: $libfn\n" if !open($libf, ">", $libfn);
+  print $libf $empty_lheadr;  # Signature.
+  for my $objfn (@_) {
+    filter_obj_to_lib($objfn, $libf);
+  }
+  # TODO(pts): Better detect output errors in $libf.
+  if ($libf and !close($libf)) { $libf = undef; die "$0: fatal: cannot close output file: $libfn\n"; }
+  $libf = undef;
+  };  # End of eval block.
+  close($libf) if $libf;
+  if ($@) { print STDERR $@; exit(8); }
+}
+
+# Loads an OMF .obj file. This function may misbehave for .obj files not created
 # by (wcc or nasm) invoked by dosmc.
 # Based on: https://pierrelib.pagesperso-orange.fr/exec_formats/OMF_v1.1.pdf
 sub load_obj($$) {
@@ -227,6 +281,8 @@ sub load_obj($$) {
     #printf STDERR "info: RECORD 0x%x %d\n", $type, $size;
     die "$0: fatal: EOF in obj record header\n" if (read($f, $data, $size) or 0) != $size;
     --$size; substr($data, -1) = "";  # Ignore checksum.
+    # Maintenance note: If useful action is added for a new $type here, also
+    # add the $type value to %LIB_RECORD_TYPES.
     if ($type == 0x96) {  # LNAMES.
       for (my $i = 0; $i < $size; ) {
         my $fsize = vec($data, $i++, 8);
@@ -416,9 +472,11 @@ sub load_obj($$) {
       last;
     } elsif ($type == 0x8b) {  # Long MODEND.
       die "$0: fatal: long MODEND not supported\n";
-    } elsif ($type == 0x80) {  # THEADR.
-    } elsif ($type == 0x88) {  # COMENT.
-    } elsif ($type == 0x9a) {  # GRPDEF.
+    # Maintenance note: If useful action is added for a new $type here, also
+    # add the $type value to %LIB_RECORD_TYPES.
+    } elsif ($type == 0x80) {  # THEADR. Also omit from .lib files.
+    } elsif ($type == 0x88) {  # COMENT. Also omit from .lib files.
+    } elsif ($type == 0x9a) {  # GRPDEF. Also omit from .lib files.
     } else {
       # We do not need to support common symbols, wcc never generates them.
       die sprintf("%s: fatal: unsupported obj record type: type=0x%x size=%d\n", $0, $type, $size);
@@ -815,12 +873,15 @@ my @defines;
 for my $arg (@ARGV) {
   if ($arg eq "--" or $arg eq "-" or !length($arg)) {
     die "$0: fatal: unsupported argument: $arg\n";
-  } elsif ($arg eq "-pl" or $arg eq "-zs" or $arg eq "-c" or $arg eq "-ce" or $arg eq "-cn" or $arg eq "-cw") {
-    $PL = $arg;  # Do preprocessing (-pl), syntax check (-zs), compile to .obj (-c), emit exec without nasm (nonstandard) (-ce), emit exec with nasm (nonstandard) (-cw), compile to .wasm (nonstandard) (-cw).
-    # The .wasm output file of -cw can be used as a source file in the next
-    # dosmc invocation. It will produce an identical executable (tested
-    # with examples/helloc2.nasm), except that the entry point is not
-    # reported by -cw (i.e. wdis emits `END' instead of `END ...').
+  } elsif ($arg eq "-pl" or  # Do preprocessing only (also wcc).
+           $arg eq "-zs" or  # Do syntax check only (also wcc).
+           $arg eq "-c" or  # Compile to .obj files, don't link (hardcoded to wcc, also wcl).
+           $arg eq "-ce" or  # Compile and link to executable (.com or .exe) directly (default, no wcc, no wcl).
+           $arg eq "-cn" or  # Compile and link to executable (.com or .exe) using nasm while linking (no wcc, no wcl).
+           $arg eq "-cl" or  # Compile and build static library (.lib) from the .obj files.
+           $arg eq "-cw") {  # Compile to .wasm files, don't link (no wcc, no wcl). .wasm output can be used next time instead of .obj (-c), except that the entry point is omitted (i.e. wdis emits `END' instead of `END ...').
+    $PL = $arg;
+    $EXT = "lib" if $arg eq "-cl";
   } elsif ($arg eq "-q") {
     $Q = $arg;  # Quiet. Default.
   } elsif ($arg eq "-nq") {  # No such flag in wcc or wcl.
@@ -866,9 +927,8 @@ die "$0: fatal: missing executable $MYDIR/ow2bin/wcc; run $MYDIR/download_openwa
 my $in1base = $sources[0]; $in1base =~ s@[.][^./]+\Z(?!\n)@@s;  # TODO(pts): Port to Win32.
 my $PLL = "";
 die "$0: fatal: output mode incompatible -bt=bin: $PL\n" if
-    $EXT eq "bin" and !($PL eq "-ce" or $PL eq "-cn" or $PL eq "-pl");
-if ($PL eq "-cn" or $PL eq "-ce") {
-  # !! TODO(pts): Add -cm to produce .nasm output.
+    $EXT eq "bin" and !($PL eq "-ce" or $PL eq "-cn" or $PL eq "-cl" or $PL eq "-pl");
+if ($PL eq "-cn" or $PL eq "-ce" or $PL eq "-cl") {
   if ($EXT eq "bin") {
     $is_multiple_sources_ok = 1 if !length($EXEOUT);
     $PL = "-bt=bin" if !$is_multiple_sources_ok;  # For error message below.
@@ -1172,8 +1232,8 @@ my $nasm_cpu = $CPUF eq "-0" ? "8086" : substr($CPUF, 1) . "86";
 my @nasm_cmd = ("nasm", @d_args, "-O9", "-f", $is_bin ? "bin" : "obj", "-w+orphan-labels");  # Default is `bits 16'.
 my $nasm_cmd_size = @nasm_cmd;
 my @objfns;
-my $do_objfn_arg = ($PL eq "-cw" or $PL eq "-ce" or $PL eq "-cn" or $PL eq "-c");
-my $forced_objfn = (($is_bin or ($PL ne "-cw" and $PL ne "-ce" and $PL ne "-cn")) and length($EXEOUT)) ? $EXEOUT : undef;
+my $do_objfn_arg = ($PL eq "-cw" or $PL eq "-ce" or $PL eq "-cn" or $PL eq "-cl" or $PL eq "-c");
+my $forced_objfn = (($is_bin or ($PL ne "-cw" and $PL ne "-ce" and $PL ne "-cn" and $PL ne "-cl")) and length($EXEOUT)) ? $EXEOUT : undef;
 for my $srcfn (@sources) {
   my $srcbase = $srcfn;
   my $ext = $srcbase =~ s@[.]([^./]+)\Z(?!\n)@@s ? $1 : "";  # TODO(pts): Port to Win32.
@@ -1233,6 +1293,9 @@ if ($is_bin) {
   if ($is_nasm and run_command("nasm", "-f", "bin", "-o", $EXEOUT, $exefn)) {
     print STDERR "$0: fatal: nasm failed\n"; exit(6);
   }
+} elsif ($PL eq "-cl") {
+  print_command("//ar", "-fe=$EXEOUT", @objfns) if !length($Q);
+  build_static_library($EXEOUT, @objfns);
 } elsif ($PL eq "-cw") {
   # Output of wdis ($EXEOUT) can be fed to wasm again to produce an .obj file.
   if (run_command("wdis", "-a", "-fi", "-i=\@", $objfns[0], " > $EXEOUT")) {
