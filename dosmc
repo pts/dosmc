@@ -938,8 +938,10 @@ sub find_perl_script($;$) {
   if ($is_dir_ok and -d($script)) { return \$script }
   # Don't try . if not explicitly specified, there may be a malicious script
   # lying around in the source tree.
-  my @prefixes = $script =~ m@\A(?:[.]/|[.][.]/|[/])@ ?  # TODO(pts): Port this to Win32.
-      ("") : ("$MYDIR/ow2bin/", "$MYDIR/");
+  my $extdir;
+  my @prefixes = $script =~ m@\A(?:[.]/|[.][.]/|[/])@ ? ("") :  # TODO(pts): Port this to Win32.
+      (defined($extdir = $ENV{DOSMCEXT}) and length($extdir)) ? ("$extdir/") :
+      ("$MYDIR/ow2bin/", "$MYDIR/");
   for my $prefix (@prefixes) {
     my $fn = $prefix . $script;
     if (-f($fn)) { return $fn }

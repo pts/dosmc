@@ -178,7 +178,9 @@ the right $ENV{PATH}, @INC and @ARGV. $ARGV[0] will be the directory name.
 dosmc has basic support for extension commands written in Perl. Write your
 extension command as MYCMD.pl, save it to the same directory as dosmc's wcc
 (preferred) or to the same directory as the dosmc Perl script, and invoke it
-as `./dosmc MYCMD'. dosmc will sets $ENV{PATH}, @INC, @ARGV properly.
+as `./dosmc MYCMD'. dosmc will sets $ENV{PATH}, @INC, @ARGV properly. If
+it's inconvenient to save to these directories, then save the Perl script
+anywhere, and specify the directory name in $ENV{DOSMCEXT}.
 
 Notes about maximum memory usage of DOS programs:
 
