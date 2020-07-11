@@ -72,28 +72,31 @@ for that in the OpenWatcom C language. Alternatively, you can use entire
 .asm files as sources (see some in the examples/ directory), in either NASM
 or WASM syntax.
 
-ow According to https://www.bttr-software.de/links/ , there
-aren't ma
-
 Source file formats:
 
 * If the extension is .c, then the bundled wcc (OpenWatcom C compiler) is
   used to create the .obj file (in OMF format).
-* If the extension is .nasm, then the bundled NASM 0.99.06 is
-  used to create the .obj file.
+* If the extension is .nasm, then the bundled NASM 0.99.06 is used to create
+  the .obj file. NASM is recommended or WASM for writing assembly code,
+  because of the versatily and the clean syntax. dosmc also provides
+  some convenience macros (e.g. __LINKER_FLAG) and defaults, see how compact
+  examples/helloc.nasm is. (Also compare examples/helloc2.nasm
+  o examples/helloc2w.wasm for compactness.) It's also possible to write
+  your program in assembly only (no .c code), and use dosmc to compile it
+  to .com or .exe, see examples/helloc.nasm for an example.
 * If the extension is .wasm, then the bundled WASM (OpenWatcom assembler) is
-  used to create the .obj file.
+  used to create the .obj file. Convenience macros are not provided.
 * If the extension is .asm, then dosmc looks at the first directive in
   the file and autodetects it as .nasm or .wasm.
-* If the extension is .obj, then the file is used as is for linking.
-  According to https://www.bttr-software.de/links/ , there aren't many
-  assemblers which can create DOS OMF .obj files -- most (e.g. yasm and
-  fasm) can't, according to https://board.flatassembler.net/topic.php?t=7449
-  (2007), only NASM, WASM and LZASM can. Using NASM is recommended, because
-  it has a clean syntax and it's included and integrated very conveniently
-  (see examples/*.nasm) to dosmc. WASM is also integrated (see
-  examples/*.wasm), but it's less convenient to use because of the lots of
-  boilerplate.
+* If the extension is .obj, then the file is used as is for linking. The
+  file format is DOS OMF .obj. Typical sources of .obj files: output of wcc
+  (e.g. dosmc -c file.c), output of NASM (e.g. dosmc -c file.nasm),
+  output of WASM (e.g. dosmc -c file.wasm), output of other assemblers
+  (e.g. see examples/helloc2a.asm for MASM, TASM and A86; see
+  examples/helloc2l.asm for LZASM). Most modern assemblers (e.g. YASM and
+  FASM) can't create OMF .obj files, thus are incompatible with dosmc.
+  NBASM uses a differnet sytnax, and we didn't managed to make it produce an
+  .obj file, starting from examples/helloc2a.asm.
 
 Program entry points for dosmc (choose any):
 

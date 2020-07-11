@@ -29,8 +29,6 @@ eval '(exit $?0)' && eval 'PERL_BADLANG=x;PATH="$PATH:.";export PERL_BADLANG\
 # !! Cleanup flag to remove .tmp files.
 # !! Add Perl script execution mode: `dosmc myscript.pl ...'.
 # !! Add build mode: `dosmc .'.
-# !! not, buggy: Allow .obj files from A86, give source example for section.
-# !! doc: Allow .obj files from WASM, give source example for section.
 # !! doc: http://nuclear.mutantstargoat.com/articles/retrocoding/dos01-setup/
 #
 
