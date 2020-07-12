@@ -6,9 +6,13 @@ contains and uses the wcc C compiler in OpenWatcom V2 and also NASM, and it
 has its own C library (libc) and custom optimizing linker for tiny
 executable output.
 
-Usage:
+Download on Linux:
 
-  $ ./download_openwatcom.sh  # Run only once.
+  $ git clone --depth 1 https://github.com/pts/dosmc
+  $ cd dosmc
+  $ ./download_linuxi386exec.sh
+
+Usage:
 
   $ ./dosmc examples/prog.c  # Creates prog.exe.
 
