@@ -40,7 +40,7 @@ static inline void _printmsgx(const char *msg);
 parm [ dx ] \
 modify [ ah ];
 
-/* Writes a $-delimited string (with far pointer) to stdout. */
+/* Writes a '$'-terminated string (with far pointer) to stdout. */
 static inline void _printmsgx_far(const char far *msg);
 #pragma aux _printmsgx_far = \
 "mov ah, 9" /* WRITE_STDOUT */ \
@@ -56,8 +56,35 @@ modify [ ah ];
 
 /* Example usage:
  * static const STRING_WITHOUT_NUL(msg, "Hello, World!\r\n$");
+ * ... printmsgx(msg);
  */
 #define STRING_WITHOUT_NUL(name, value) char name[sizeof(value) - 1] = value
+
+/* Writes a '\0'-terminated string to the file descriptor. */
+/* TODO(pts): Make it not inline. */
+static void fdputs(int fd, const char *s);
+#pragma aux fdputs = \
+"push ds" \
+"pop es" \
+"mov cx, -1" \
+"mov ax, 0x4000" /* WRITE in ah, 0 in al for scasb */ \
+"mov dx, di"  /* dx will point to the buffer (s argument) */ \
+"repnz scasb" \
+"not cx" \
+"dec cx"  /* cx will be the number of bytes to write */ \
+"int 0x21" \
+parm [ bx ] [ di ] \
+modify [ ax cx dx di ];  /* Also modifies cf */
+
+/* Writes a '\0'-terminated string to stdout. */
+static inline void oputs(const char *s) {
+  fdputs(1, s);
+}
+
+/* Writes a '\0'-terminated string to stderr. */
+static inline void eputs(const char *s) {
+  fdputs(2, s);
+}
 
 /* Writes single byte to stdout. Binary safe when redirected. */
 /* TODO(pts): Make it not inline. */
@@ -69,7 +96,7 @@ parm [ dl ] \
 modify [ ax ];
 #if 0  /* Correct but longer. */
 #pragma aux putchar = \
-"push ax" \
+"push ax"  /* byte to print at sp */ \
 "mov ah, 0x40" \
 "mov bx, 1"  /* stdout */ \
 "mov cx, bx"  /* 1 byte */ \
@@ -84,8 +111,8 @@ modify [ bx cx dx ];  /* Also modifies cf */
 /* TODO(pts): Make it not inline. */
 static void eputc(char c);
 #pragma aux eputc = \
-"push ax" \
-"mov ah, 0x40" \
+"push ax"  /* byte to print at sp */ \
+"mov ah, 0x40" /* WRITE */ \
 "mov bx, 2"  /* stderr */ \
 "mov cx, 1"  /* 1 byte */ \
 "mov dx, sp" \
