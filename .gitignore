@@ -9,3 +9,7 @@
 /examples/prog2.wasm
 /open-watcom-2_0-c.zip
 /open-watcom-2_0-c.zip.tmp
+/dosmc.dir.win32exec-*.7z.exe
+/dosmc.dir/*.exe
+/dosmc.dir/*.dll
+/dosmc.dir/perl510.dll
