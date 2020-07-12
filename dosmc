@@ -1,6 +1,7 @@
 #!/bin/sh
 # by pts@fazekas.hu at Sun Jul 12 02:24:43 CEST 2020
-unset D; D="$(readlink "$0" 2>/dev/null)"; test "$D" || D="$0"
-D="${D%/*}"/dosmc.dir
+unset D __SCRIPTFN
+__SCRIPTFN="$(readlink "$0" 2>/dev/null)"; test "$__SCRIPTFN" || __SCRIPTFN="$0"
+export __SCRIPTFN; D="${__SCRIPTFN%/*}"/dosmc.dir
 test -f "$D"/perl && PATH="$D:$PATH" && export PATH
 exec perl -- "$D"/dosmc.pl "$@"; exit 1

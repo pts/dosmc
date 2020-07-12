@@ -31,6 +31,7 @@ use strict;
 my $MYDIR = $0;
 die "$0: fatal: script directory not specified\n" if $MYDIR !~ s@/+[^/]+\Z(?!\n)@@;
 die "$0: fatal: bad current directory: $MYDIR\n" if $MYDIR =~ m@:@;  # $ENV{PATH} separator. TODO(pts): Port to Win32.
+$0 = $ENV{__SCRIPTFN} if defined($ENV{__SCRIPTFN});
 
 if (!@ARGV or $ARGV[0] eq "-?" or $ARGV[0] eq "-h" or $ARGV[0] eq "--help" or $ARGV[0] eq "help") {
   die "$0: fatal: cannot redirect stdout\n" if !@ARGV and !open(STDOUT, ">&", \*STDERR);
