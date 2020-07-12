@@ -22,15 +22,26 @@
 # !! Cleanup flag to remove .tmp files.
 # !! doc: http://nuclear.mutantstargoat.com/articles/retrocoding/dos01-setup/
 # !! Add instructions to build with wcl and debug info (produces larger .exe), and to use debugger.
+# !! For the Win32 port: port dosmc.dir/preamblew.pm to Win32, or remove packages which don't work.
+# !! Win32 port: Remove \r (fixing line breaks) from wdis output, to make it compatible with Linux.
 #
 
 BEGIN { $^W = 1 }
 use integer;
 use strict;
 
+my $is_win32 = $^O =~ m@win32\b@i;  # Example: "MSWin32", "linux".
+my $path_sep = $is_win32 ? ";" : ":";
+my $tool_exe_ext = $is_win32 ? ".exe" : "";
 my $MYDIR = $0;
-die "$0: fatal: script directory not specified\n" if $MYDIR !~ s@/+[^/]+\Z(?!\n)@@;
-die "$0: fatal: bad current directory: $MYDIR\n" if $MYDIR =~ m@:@;  # $ENV{PATH} separator. TODO(pts): Port to Win32.
+if ($is_win32) {
+  # TODO(pts): Simplify $0 based on current directory, now it's absolute.
+  die "$0: fatal: script directory not specified\n" if $MYDIR !~ s@[/\\]+[^/\\]+\Z(?!\n)@@;
+  die "$0: fatal: bad current directory: $MYDIR\n" if $MYDIR =~ m@"@;  # For $ENV{PATH}.
+} else {
+  die "$0: fatal: script directory not specified\n" if $MYDIR !~ s@/+[^/]+\Z(?!\n)@@;
+  die "$0: fatal: bad current directory: $MYDIR\n" if $MYDIR =~ m@:@;  # $ENV{PATH} separator.
+}
 $0 = $ENV{__SCRIPTFN} if defined($ENV{__SCRIPTFN});
 
 if (!@ARGV or $ARGV[0] eq "-?" or $ARGV[0] eq "-h" or $ARGV[0] eq "--help" or $ARGV[0] eq "help") {
@@ -211,6 +222,7 @@ sub filter_obj_to_lib($$) {
   my $type = -1;
   eval {
   die "$0: fatal: cannot open obj file for reading: $objfn\n" if !open($f, "<", $objfn);
+  binmode($f);  # Needed everywhere for Win32 compatibility.
   while (1) {
     my($data, $size);
     die "$0: fatal: EOF in obj record header\n" if (read($f, $data, 3) or 0) != 3;
@@ -240,6 +252,7 @@ sub build_static_library($@) {
   my $libf;
   eval {
   die "$0: fatal: cannot open for writing: $libfn\n" if !open($libf, ">", $libfn);
+  binmode($libf);
   print $libf $empty_lheadr;  # Signature.
   for my $objfn (@_) {
     filter_obj_to_lib($objfn, $libf);
@@ -264,6 +277,7 @@ sub load_obj($$) {
   my $is_just_after_modend = 0;
   eval {
   die "$0: fatal: cannot open obj or lib file for reading: $objfn\n" if !open($f, "<", $objfn);
+  binmode($f);
   while (1) {  # Read next module (.obj within .lib).
   my $obj_symbol_prefix = "O$objli\$"; ++$objli;
   my @lnames = ("-LN0");
@@ -703,6 +717,7 @@ sub link_executable($$$$@) {
   my $exef;  # May be of .com, .exe or .nasm format.
   eval {
   die "$0: fatal: cannot open for writing: $exefn\n" if !open($exef, ">", $exefn);
+  binmode($exef);
   if ($is_nasm) {  # emit_nasm.
     my($fullprog_code, $fullprog_data, $fullprog_bss, $fullprog_end);
     # No need to disambiguate NASM symbols like code_end, because
@@ -923,8 +938,19 @@ times -(((bss_end-bss_start)+(data_end-data_start)+(code_end-code_start+0x100)+3
 # --- Perl script runner.
 
 sub fix_path() {
-  $ENV{PATH} = "/bin:/usr/bin" if !defined($ENV{PATH}) or !length($ENV{PATH});  # TODO(pts): Port to Win32.
-  $ENV{PATH} = "$MYDIR:$ENV{PATH}";  # TODO(pts): Port to Win32.
+  if ($is_win32) {
+    $ENV{PATH} = "" if !defined($ENV{PATH}) or !length($ENV{PATH});
+    die "$0: assert: bad directory for \$ENV{PATH}: $MYDIR\n" if
+        $MYDIR =~ y@"@@;
+    # !! TODO(pts): Verify quoting with space and with ; in $MYDIR.
+    my $mydirq = $MYDIR =~ y@;@@ ? qq("$MYDIR") : $MYDIR;
+    $ENV{PATH} = "$mydirq;$ENV{PATH}";
+  } else {
+    $ENV{PATH} = "/bin:/usr/bin" if !defined($ENV{PATH}) or !length($ENV{PATH});
+    die "$0: assert: bad directory for \$ENV{PATH}: $MYDIR\n" if
+        $MYDIR =~ y@:@@;
+    $ENV{PATH} = "$MYDIR:$ENV{PATH}";
+  }
 }
 
 sub find_perl_script($;$) {
@@ -1071,7 +1097,11 @@ for my $srcfn (@sources) {
 }
 my $is_multiple_sources_ok = 0;
 
-die "$0: fatal: missing executable $MYDIR/wcc; run $MYDIR/../download_openwatcom.sh first\n" if !-x("$MYDIR/wcc");
+if (!-x("$MYDIR/wcc$tool_exe_ext")) {
+  my $download_script_fn = $is_win32 ? "download_win32exec.sh" : $^O =~ m@linux@i ? "download_linuxi386exec.sh" : undef;
+  die "$0: fatal: missing executable $MYDIR/wcc$tool_exe_ext -- is your host system supported?\n" if !defined($download_script_fn);
+  die "$0: fatal: missing executable $MYDIR/wcc$tool_exe_ext; run $MYDIR/../$download_script_fn first\n";
+}
 my $in1base = $sources[0]; $in1base =~ s@[.][^./]+\Z(?!\n)@@s;  # TODO(pts): Port to Win32.
 my $PLL = "";
 die "$0: fatal: output mode incompatible -bt=bin: $PL\n" if
@@ -1102,12 +1132,16 @@ delete $ENV{INCLUDE};
 fix_path();
 
 # Quote string from Bourne-like shells.
-# !! Port this to Win32.
 sub shqe($) {
   return $_[0] if $_[0]=~/\A[-.\/\w][-.\/\w=]*\Z(?!\n)/;
-  my $S=$_[0];
-  $S=~s@'@'\\''@g;
-  "'$S'"
+  my $s = $_[0];
+  if ($is_win32) {
+    die "$0: fatal: unsupported shell argument: $s\n" if $s =~ y@"@@;
+    qq("$s")
+  } else {
+    $s = ~s@'@'\\''@g;
+    "'$s'"
+  }
 }
 
 sub print_command(@) {
@@ -1124,6 +1158,8 @@ sub run_command(@) {
     my $fn = substr(pop(@_), 3);
     my $f;
     die "$0: fatal: cannot open for writing: redirect stdout\n" if !open($f, ">", $fn);
+    binmode($f);
+    # !! TODO(pts): Port to Win32. Where do we need binmode?
     my $old_stdoutf;
     die "$0: fatal: cannot redirect old stdout\n" if !open($old_stdoutf, ">&", \*STDOUT);
     die "$0: fatal: cannot redirect stdout\n" if !open(STDOUT, ">&", $f);
@@ -1143,6 +1179,7 @@ sub detect_asm($) {
   my $asmfn = $ARGV[0];
   my $f;
   die "$0: fatal: cannot open .asm file for reading: $asmfn\n" if !open($f, "<", $asmfn);
+  binmode($f);  # Would also work without it, but be deterministc.
   local $_;
   while (<$f>) {
     s@\A\s+@@;
@@ -1396,6 +1433,7 @@ for my $srcfn (@sources) {
     my $tmpfn = "$srcbase.inc.tmp.nasm";
     my $tmpf;
     die "$0: fatal: cannot open for writing: $tmpfn\n" if !open($tmpf, ">", $tmpfn);
+    binmode($tmpf);
     my $srcfnq = $srcfn;
     $srcfnq =~ s@([\x00-\x1F\\\$"\x7F-\xFF])@ "\\x" . pack("H", $1) @ge;
     my $nasm_header = $is_bin ? "" : $NASM_OBJ_HEADER;
@@ -1420,8 +1458,12 @@ for my $srcfn (@sources) {
     }
     splice @wasm_cmd, $wasm_cmd_size;
   } else {
-    push @wcc_cmd, "-fo=$objfn" if $do_objfn_arg;
+    if ($do_objfn_arg) {
+      push @wcc_cmd, "-fo=$objfn";
+      $wcc_cmd[-1] =~ y@/@\\@ if $is_win32;  # !! Do it more.
+    }
     push @wcc_cmd, $srcfn;
+    $wcc_cmd[-1] =~ y@/@\\@ if $is_win32;  # !! Do it more.
     if (run_command(@wcc_cmd)) {
       print STDERR "$0: fatal: wcc failed\n"; exit(2);
     }

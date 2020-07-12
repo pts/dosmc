@@ -39,9 +39,15 @@ http://github.com/pts/pts-xtiny
 dosmc limitations:
 
 * Host build system must be Linux i386 or amd64. (It's possible to make it
-  work on other Unix systems on which wcc is available.) Porting to FreeBSD
-  and Windows should be easy, and porting to macOS could be achieved by
-  creating a Docker image of the Linux port.
+  work on other Unix systems on which wcc is available.) Porting to Windows
+  (Win32) is underday, proof-of-concept compilation already works. Porting to
+  FreeBSD should be easy (with Linux compatibility `kldload linux'). Porting to
+  macOS could be achieved by creating a Docker image of the Linux port.
+  Porting to DOS (32-bit, with DOS extenders) may work, but we need Perl
+  first: https://perldoc.perl.org/perldos.html , also Perl 5.8.8 has been
+  ported: https://www.ibiblio.org/pub/micro/pc-stuff/freedos/files/distributions/1.2/repos/pkg-html/perl.html
+  . Other host systems are unlikely to work, because OpenWatcom hasn't been
+  ported to them.
 * It depends on Perl (standard packages only).
 * It depends on the wcc C compiler in OpenWatcom V2.
 * Target is DOS 8086 (16-bit) .exe or DOS 8086 (16-bit) .com.
