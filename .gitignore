@@ -2,10 +2,10 @@
 *.tmp.nasm
 *.tmp.wasm
 *.tmp.obj
-prog.exe
-prog.com
+/examples/*.exe
+/examples/*.com
+/examples/*.tmp.*
+/examples/prog.wasm
+/examples/prog2.wasm
 /open-watcom-2_0-c.zip
 /open-watcom-2_0-c.zip.tmp
-/ow2bin
-
- 
