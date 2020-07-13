@@ -3,17 +3,19 @@
 # dosmc: C compiler and assembler to produce tiny DOS .exe and .com executables
 # by pts@fazekas.hu at Thu Jun 25 00:59:56 CEST 2020
 #
-# TODOs:
+# TODOs which need disassembly of _TEXT and basic block analysis
 #
 # !! Optimize away call in entry point of main and _start. This can be tricky and needs smart disassembly, for example in examples/m0f.c, code of _start and double_int overlap.
 # !! Optimize away extra exit after _start.
 # !! Optimize away `pop ...' registers at end of _start.
 # !! Optimize `mov al, ...; mov ah, ...' at end of main and _start.
-# !! Add option for word alignment of data segments, for speed.
 # !! Add disassembler to check that ds is not used in the .exe file, and optimize away `pop ds'. (Without a disassembler, even if _CONST, _CONST2 and _DATA are empty, pointers to local (on-stack) variables may be taken and they won't work.)
-# !! Optimize away everything if the first instruction by the entry point is `ret' or exit.
 # !! Optimize away unused basic blocks from .text.
 # !! Remove `push dx' and `pop dx' (and other register operations) from examples/hello.com.
+#
+# Other TODOs:
+#
+# !! Add option for word alignment of data segments, for speed.
 # !! Make simple_nasm_exe.nasm work with the built-in linker (ds, ss, sp setup is unnecessary, remove that).
 # !! Add -bt=auto for using .com if it fits to 64 KiB of memory, otherwise using .exe. Also autodetect .bin for a single .nasm source file with non-0x100 org in the beginning.
 # !! Patch `END' to `END ...' in the -cw output. This is hard (needs .obj file modification to add an LPUBDEF) if there is no label for that already.
@@ -23,6 +25,8 @@
 # !! Add instructions to build with wcl and debug info (produces larger .exe), and to use debugger.
 # !! For the Win32 port: port dosmc.dir/preamblew.pm to Win32, or remove packages which don't work.
 # !! Win32 port: Remove \r (fixing line breaks) from wdis output, to make it compatible with Linux.
+# !! Finish Win32 port.
+# !! Add macOS port (will also work on Linux) using Docker.
 #
 
 BEGIN { $^W = 1 }
