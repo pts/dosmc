@@ -27,6 +27,8 @@
 # !! Win32 port: Remove \r (fixing line breaks) from wdis output, to make it compatible with Linux.
 # !! Finish Win32 port.
 # !! Add macOS port (will also work on Linux) using Docker.
+# !! Add dosmcdir.mak as an alternative of dosmcdir.pl (build mode).
+# !! Add simple Unix-like shell implemented in Perl for build mode. Don't just use a wrapper around system(...), because syntax of cmd.exe on Win32 is different from /bin/sh on Unix.
 #
 
 BEGIN { $^W = 1 }
