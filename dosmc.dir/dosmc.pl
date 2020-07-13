@@ -1139,7 +1139,7 @@ sub shqe($) {
     die "$0: fatal: unsupported shell argument: $s\n" if $s =~ y@"@@;
     qq("$s")
   } else {
-    $s = ~s@'@'\\''@g;
+    $s =~ s@'@'\\''@g;
     "'$s'"
   }
 }
