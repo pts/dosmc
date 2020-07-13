@@ -1021,7 +1021,7 @@ times -(((bss_end-bss_start)+(data_end-data_start)+(code_end-code_start+0x100)+3
     $segment_vofs{_TEXT} = $vofs; $vofs += length($ledata{_TEXT});
     my $after_text_vofs = $vofs;
     $vofs &= 15 if $is_exe;
-    my $dgroup_vofs = $segment_vofs{CONST} = $vofs; $vofs += length($ledata{CONST});
+    my $dgroup_vofs = $segment_vofs{CONST} = $vofs; $vofs += length($ledata{CONST});  # String literals in CONST.
     $segment_vofs{CONST2} = $vofs; $vofs += length($ledata{CONST2});
     $segment_vofs{_DATA} = $vofs; $vofs += length($ledata{_DATA});
     $segment_vofs{_BSS} = $vofs; $vofs += $segment_sizes{_BSS};
@@ -1424,6 +1424,12 @@ segment _TEXT  ; Select default.
 %undef __SEGTRY__CONST2
 %undef __SEGTRY_const2
 %undef __SEGTRY_CONST2
+%undef __SEGTRY_.rodata
+%undef __SEGTRY_.RODATA
+%undef __SEGTRY__rodata
+%undef __SEGTRY__RODATA
+%undef __SEGTRY_rodata
+%undef __SEGTRY_RODATA
 %define __SEGTRY_%1  ; Ignores everything after the first whitespace in %1.
 %undef  segment
 %define segment segment  ; Use original meaning of the segment directive below to select segment.
@@ -1511,6 +1517,18 @@ segment CONST2
 %elifdef __SEGTRY_const2
 segment CONST2
 %elifdef __SEGTRY_CONST2
+segment CONST2
+%elifdef __SEGTRY_.rodata
+segment CONST2
+%elifdef __SEGTRY_.RODATA
+segment CONST2
+%elifdef __SEGTRY__rodata
+segment CONST2
+%elifdef __SEGTRY__RODATA
+segment CONST2
+%elifdef __SEGTRY_rodata
+segment CONST2
+%elifdef __SEGTRY_RODATA
 segment CONST2
 %else
 ; %1 may also include segment attributes (e.g. class=CODE align=1), which
