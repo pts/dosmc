@@ -22,6 +22,14 @@
  *   to make es:0 point to the PSP (Program Segment Prefix) at the entry
  *   point. Not enabled by default, because in the Watcom calling convention
  *   functions can modify es any time without restoring it.
+ * Example: __LINKER_FLAG(force_argc_zero)
+ *   Force argc=0 and argv=NULL for main, no matter what was speficied in
+ *   the command line. This makes the executable shorter. Alternatively, you
+ *   can specify int main(void) { ... } and get even more savings.
+ * Example: __LINKER_FLAG(uninitialized_argc)
+ *   Don't initialize argc and argv in main. This makes the executable
+ *   shorter. Alternatively, you can specify int main(void) { ... } and get
+ *   even more savings.
  */
 #define __LINKER_FLAG(name) extern int _linker_flag_##name; __PRAGMA(extref _linker_flag_##name)
 

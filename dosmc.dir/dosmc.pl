@@ -10,7 +10,6 @@
 # !! Optimize away `pop ...' registers at end of _start.
 # !! Optimize `mov al, ...; mov ah, ...' at end of main and _start.
 # !! Add option for word alignment of data segments, for speed.
-# !! TODO(pts): Add automatic argv splitting for main, but keep using argc=0 and argv=NULL if -D_STUBARG_MAIN, and keep these unspecified if -D_NOARG_MAIN.
 # !! Add disassembler to check that ds is not used in the .exe file, and optimize away `pop ds'. (Without a disassembler, even if _CONST, _CONST2 and _DATA are empty, pointers to local (on-stack) variables may be taken and they won't work.)
 # !! Optimize away everything if the first instruction by the entry point is `ret' or exit.
 # !! Optimize away unused basic blocks from .text.
@@ -163,7 +162,7 @@ sub is_complicated_8086_code($$$) {
   $result
 }
 
-my %LINKER_FLAG_OK = map { $_ => 1 } qw(omit_cld uninitialized_bss start_es_psp);
+my %LINKER_FLAG_OK = map { $_ => 1 } qw(omit_cld uninitialized_bss start_es_psp force_argc_zero uninitialized_argc);
 my @SEGMENT_ORDER = qw(_TEXT CONST CONST2 _DATA _BSS);  # Constant, OpenWatcom wcc.
 my %SEGMENT_NAME_OK = map { $_ => 1 } @SEGMENT_ORDER;
 my %ASM_DATA_OP = (1 => "db", 2 => "dw", 4 => "dd", 8 => "dq");  # Constant, nasm.
@@ -781,6 +780,9 @@ sub link_executable($$$$@) {
   die "$0: fatal: too many entry points (main functions)\n" if $entry_count > 1;
   die "$0: fatal: missing entry point (main function)\n" if $entry_count == 0;
 
+  die "$0: fatal: conflicting linker flags: force_argc_zero, uninitialized_argc\n" if
+      $lf{force_argc_zero} and $lf{uninitialized_argc};
+
   my $is_exe = $EXT eq "exe";  # Otherwise .com.
   my $exit_code = get_8086_exit_code($ledata{_TEXT}, \%text_symbol_ofs);
   if (defined($exit_code)) {  # Shortcut if the program immediately exits.
@@ -801,9 +803,9 @@ sub link_executable($$$$@) {
 
   my $does_entry_point_return = !defined($exit_code);  # TODO(pts): Smarter detection.
   my $is_data_used = !defined($exit_code);
-  my $need_clear_ax = 0;  # TODO(pts): If it always stays 0, remove this functionality.
-  my $do_clear_bss_with_code = (!$lf{uninitialized_bss} and $segment_sizes{_BSS} + ($need_clear_ax << 1) > 14);  # 14 == length($clear_bss_full).
   my $entry_point_mode = defined($text_symbol_ofs{"G\$_start_"}) ? 1 : (defined($text_symbol_ofs{"G\$main_"}) and $do_use_argc) ? 2 : defined($text_symbol_ofs{"G\$main_"}) ? 3 : 0;
+  my $need_clear_ax = ($entry_point_mode == 2 and !$lf{uninitialized_argc} and $lf{force_argc_zero}) ? 1 : 0;
+  my $do_clear_bss_with_code = (!$lf{uninitialized_bss} and $segment_sizes{_BSS} + ($need_clear_ax << 1) > 14);  # 14 == length($clear_bss_full).
   die "$0: assert: bad entry_point_mode\n" if !$entry_point_mode;  # We've checked $entry_count above already.
   my $need_clear_df = ($do_clear_bss_with_code or $entry_point_mode == 2 or (!$lf{omit_cld} and $has_string_instructions and !(
       defined($text_symbol_ofs{"G\$_start_"}) and substr($ledata{_TEXT}, $text_symbol_ofs{"G\$_start_"}, 1) =~ m@\A[\xFC\xFD]@  # cld or std.
@@ -916,6 +918,7 @@ times -(((bss_end-bss_start)+(data_end-data_start)+(code_end-code_start+0x100)+3
     } elsif ($need_clear_ax) {
       print $exef qq(db 0x31, 0xC0  ; xor ax, ax\n  ; argc=0);
     }
+    my $ubss = "";
     if ($entry_point_mode == 1) {  # Keep these consistent with the emit_executable branch below.
       if ($is_exe and $does_entry_point_return) {
         print $exef qq(db 0xE8\ndw 0x0000+G\$_start_-\(\$+2\)  ; call G\$_start_\n);
@@ -927,12 +930,18 @@ times -(((bss_end-bss_start)+(data_end-data_start)+(code_end-code_start+0x100)+3
     } elsif ($entry_point_mode == 2) {
       # OpenWatcom wcc does not support non-constant initializers, so we can call
       # main now.
-      print $exef qq(mov di, argv_bytes\nmov bp, argv_pointers\npush bp\npush es\n);
-      print $exef qq(db 0x26  ; es: prefix\n) if $is_exe;
-      print $exef qq(lds si, [0x2c-2]  ; Environment segment within PSP.\n);
-      print $exef qq(push ss\npop es\n) if $is_exe;
-      print $exef qq($GETARGCV_NASM_CODE);
-      print $exef qq(push ss\npop ds\n) if $is_exe;
+      if ($lf{uninitialized_argc}) {
+      } elsif ($lf{force_argc_zero}) {
+        print $exef qq(xor dx, dx\n);
+      } else {
+        print $exef qq(mov di, argv_bytes\nmov bp, argv_pointers\npush bp\npush es\n);
+        print $exef qq(db 0x26  ; es: prefix\n) if $is_exe;
+        print $exef qq(lds si, [0x2c-2]  ; Environment segment within PSP.\n);
+        print $exef qq(push ss\npop es\n) if $is_exe;
+        print $exef qq($GETARGCV_NASM_CODE);
+        print $exef qq(push ss\npop ds\n) if $is_exe;
+        $ubss .= qq(argv_bytes: resb 270\nargv_pointers: resb 130\n);
+      }
       print $exef qq(call G\$main_\nmov ah, 0x4c  ; dx: argv=NULL; EXIT, exit code in al\nint 0x21\n);
     } elsif ($entry_point_mode == 3) {
       print $exef qq(call G\$main_\nmov ah, 0x4c  ; EXIT, exit code in al\nint 0x21\n);
@@ -942,8 +951,7 @@ times -(((bss_end-bss_start)+(data_end-data_start)+(code_end-code_start+0x100)+3
       print $exef qq($fullprog_bss\n) if $segment_name eq "_BSS";
       emit_nasm_segment($segment_name, $exef, $segment_sizes{$segment_name}, $ledata{$segment_name}, $segment_symbols{$segment_name}, $fixupp{$segment_name});
     }
-    print $exef qq(argv_bytes: resb 270\nargv_pointers: resb 130\n) if $entry_point_mode == 2;  # Uncleared part of _BSS.
-    print $exef qq($fullprog_end\n);
+    print $exef qq($ubss$fullprog_end\n);
   } else {  # emit_executable.
     my $init_regs = "";
     $init_regs .= "\x16\x1F" if $is_exe and $is_data_used;  # push ss; pop ds
@@ -981,12 +989,18 @@ times -(((bss_end-bss_start)+(data_end-data_start)+(code_end-code_start+0x100)+3
       # main now.
       $add_ubss->("argv_bytes", 270);
       $add_ubss->("argv_pointers", 130);
-      $call_main = "\xBF\x00\x00\xBD\x00\x00\x55\x06";  # mov di, argv_bytes;; mov bp, argv_pointers;; push bp;; push es
-      $call_main .= "\x26" if $is_exe;  # db 0x26  ; es: prefix
-      $call_main .= "\xC5\x36\x2A\x00";  # lds si, [0x2c-2]  ; Environment segment within PSP.
-      $call_main .= "\x16\x07" if $is_exe;  # push ss;; pop es
-      $call_main .= $GETARGCV_8086_CODE;
-      $call_main .= "\x16\x1F" if $is_exe;  # push ss;; pop ds
+      $call_main = "";
+      if ($lf{uninitialized_argc}) {
+      } elsif ($lf{force_argc_zero}) {
+        $call_main .= "\x31\xD2";  # xor dx, dx
+      } else {
+        $call_main .= "\xBF\x00\x00\xBD\x00\x00\x55\x06";  # mov di, argv_bytes;; mov bp, argv_pointers;; push bp;; push es
+        $call_main .= "\x26" if $is_exe;  # db 0x26  ; es: prefix
+        $call_main .= "\xC5\x36\x2A\x00";  # lds si, [0x2c-2]  ; Environment segment within PSP.
+        $call_main .= "\x16\x07" if $is_exe;  # push ss;; pop es
+        $call_main .= $GETARGCV_8086_CODE;
+        $call_main .= "\x16\x1F" if $is_exe;  # push ss;; pop ds
+      }
       # call G$main_;; mov ah, 0x4c;; int 0x21  ; dx: argv=NULL; EXIT, exit code in al
       $call_main .= "\xE8\x00\x00\xB4\x4C\xCD\x21";
       $call_main_symbol = "G\$main_"; $call_main_ofs = length($call_main) - 6;
