@@ -539,6 +539,106 @@ sub load_obj($$) {
   @objs
 }
 
+# Assembly code to populate and return argc (ax) and argv (dx).
+#
+# Input: es and ss are DGROUP, ds:0 points to PSP, ss:di points to
+# argv_bytes, ss:bp points to argv_pointers, bp pushed to the stack,
+# then es pushed to the stack.
+#
+# Output: ax is argc, es is DGROUP, es:dx points to argv, ds:0 points to
+# PSP, cs is _TEXT, ss is DGROUP, other registers are modified arbitrarily,
+# input stack values popped.
+#
+# * Second half of PSP (128 bytes): size_byte + space + cmdline + cr.
+# * Size of cmdlime <= 125 bytes.
+# * Thus maximum 63 arguments from cmdline + 1 progpath argument (argv[0]).
+# * Based on https://stackoverflow.com/q/62866061 let's assume that the
+#   maximum size of argv[0] (excluding the trailing '\0') is 143 bytes.
+#
+# Thus maximum sizes:
+#
+# * argv[0] data with terminating '\0': 144 bytes.
+# * argv[1:] data with terminating '\0' after each: 126 bytes.
+# * argv pointers: 64 * 2 == 128 bytes.
+# * argv terminating NULL: 2 bytes.
+# * Total: 144 + 126 + 128 + 2 == 400 bytes in .bss.
+my $GETARGCV_8086_CODE = pack("H*", "31F6AC84C0740784C0AC75FBEBF54646897E004545B9900049750530C0AAEB06ACAA84C075F21FBE8000AC30E493C60000AC84C074223C2074F73C0974F3897E004545AAACAA84C0740E3C2074043C0975F24F30C0AAEBD9C7460000005A29D595D1E8");
+my $GETARGCV_NASM_CODE = q{
+xor si, si
+lodsb
+next_entry:
+test al, al
+jz end_entries
+next_char:
+test al, al
+lodsb
+jnz next_char
+jmp short next_entry
+end_entries:
+inc si  ; Skip over a single byte.
+inc si  ; Skip over '\0'.
+; Now ds:si points to the program name as an uppercase, absolute pathname with extension (e.g. .EXE or .COM). We will use it as argv.
+
+; Copy program name to argv[0].
+mov [bp], di  ; argv[0] pointer.
+inc bp
+inc bp
+mov cx, 144  ; To avoid overflowing argv_bytes. See above why 144.
+next_copy:
+dec cx
+jnz argv0_limit_not_reached
+xor al, al
+stosb
+jmp short after_copy
+argv0_limit_not_reached:
+lodsb
+stosb
+test al, al
+jnz next_copy
+after_copy:
+
+; Now copy cmdline.
+pop ds  ; PSP.
+mov si, 0x80  ; Command-line size byte within PSP, usually space. 0..127, we trust it.
+lodsb
+xor ah, ah
+xchg bx, ax  ; bx := ax.
+mov byte [si+bx], 0
+scan_for_arg:
+lodsb
+test al, al
+jz after_cmdline
+cmp al, ' '
+je scan_for_arg
+cmp al, 9  ; Tab.
+je scan_for_arg
+mov [bp], di  ; Start new argv[...] element. Uses ss by default, good.
+inc bp
+inc bp
+stosb  ; First byte of argv[...].
+next_argv_byte:
+lodsb
+stosb
+test al, al
+jz after_cmdline
+cmp al, ' '
+je end_arg
+cmp al, 9  ; Tab.
+jne next_argv_byte
+end_arg:
+dec di
+xor al, al
+stosb  ; Replace whitespace with terminating '\0'.
+jmp short scan_for_arg
+
+after_cmdline:
+mov word [bp], 0  ; NULL at the end of argv.
+pop dx  ; argv_pointers. Final return value of dx.
+sub bp, dx
+xchg ax, bp  ; ax := bp.
+shr ax, 1  ; Set ax to argc, it's final return value.
+};
+
 sub link_executable($$$$@) {
   my($is_nasm, $exefn, $EXT, $nasm_cpu) = splice(@_, 0, 4);  # Keep .obj files in @_.
   local $0 = "dosmc-linker-$EXT" . ($is_nasm ? "-nasm" : "");
@@ -701,9 +801,11 @@ sub link_executable($$$$@) {
 
   my $does_entry_point_return = !defined($exit_code);  # TODO(pts): Smarter detection.
   my $is_data_used = !defined($exit_code);
-  my $need_clear_ax = (defined($text_symbol_ofs{"G\$main_"}) and $do_use_argc);
+  my $need_clear_ax = 0;  # TODO(pts): If it always stays 0, remove this functionality.
   my $do_clear_bss_with_code = (!$lf{uninitialized_bss} and $segment_sizes{_BSS} + ($need_clear_ax << 1) > 14);  # 14 == length($clear_bss_full).
-  my $need_clear_df = ($do_clear_bss_with_code or (!$lf{omit_cld} and $has_string_instructions and !(
+  my $entry_point_mode = defined($text_symbol_ofs{"G\$_start_"}) ? 1 : (defined($text_symbol_ofs{"G\$main_"}) and $do_use_argc) ? 2 : defined($text_symbol_ofs{"G\$main_"}) ? 3 : 0;
+  die "$0: assert: bad entry_point_mode\n" if !$entry_point_mode;  # We've checked $entry_count above already.
+  my $need_clear_df = ($do_clear_bss_with_code or $entry_point_mode == 2 or (!$lf{omit_cld} and $has_string_instructions and !(
       defined($text_symbol_ofs{"G\$_start_"}) and substr($ledata{_TEXT}, $text_symbol_ofs{"G\$_start_"}, 1) =~ m@\A[\xFC\xFD]@  # cld or std.
       )));
 
@@ -807,14 +909,14 @@ times -(((bss_end-bss_start)+(data_end-data_start)+(code_end-code_start+0x100)+3
     if ($do_clear_bss_with_code) {  # $clear_bss.
       # .com startup: cs=ds=es=ss=PSP, ip=0x100, cs:0x100=first_file_byte.
       # .exe startup: ds=es=PSP, cs+ip+ss+sp are base+from_exe_header.
-      print $exef qq(push es\n) if $is_exe and $lf{start_es_psp};
+      print $exef qq(push es\n) if $is_exe and ($entry_point_mode == 2 or $lf{start_es_psp});
       print $exef qq(push ds\npop es\n) if $is_exe;
       print $exef qq(mov di, bss_start\nmov cx, (stack-bss_start+1)>>1\nxor ax, ax\nrep stosw\n);
-      print $exef qq(pop es\n) if $is_exe and $lf{start_es_psp};
+      print $exef qq(pop es\n) if $is_exe and ($entry_point_mode == 2 or $lf{start_es_psp});
     } elsif ($need_clear_ax) {
       print $exef qq(db 0x31, 0xC0  ; xor ax, ax\n  ; argc=0);
     }
-    if (defined($text_symbol_ofs{"G\$_start_"})) {  # TODO(pts): Keep these consistent with emit_executable.
+    if ($entry_point_mode == 1) {  # Keep these consistent with the emit_executable branch below.
       if ($is_exe and $does_entry_point_return) {
         print $exef qq(db 0xE8\ndw 0x0000+G\$_start_-\(\$+2\)  ; call G\$_start_\n);
         print $exef qq(db 0xB8, 0, 0x4C, 0xCD, 0x21  ; mov ax, 0x4c00;; int 0x21  ; EXIT with code 0.\n);
@@ -822,11 +924,17 @@ times -(((bss_end-bss_start)+(data_end-data_start)+(code_end-code_start+0x100)+3
       } else {
         print $exef qq(db 0xE9\ndw 0x0000+G\#_start_-\(\$+2\)  ; jmp strict word G\$_start_\n);
       }
-    } elsif (defined($text_symbol_ofs{"G\$main_"}) and $do_use_argc) {
+    } elsif ($entry_point_mode == 2) {
       # OpenWatcom wcc does not support non-constant initializers, so we can call
       # main now.
-      print $exef qq(xor dx, dx\ncall G\$main_\nmov ah, 0x4c  ; dx: argv=NULL; EXIT, exit code in al\nint 0x21\n);
-    } elsif (defined($text_symbol_ofs{"G\$main_"})) {
+      print $exef qq(mov di, argv_bytes\nmov bp, argv_pointers\npush bp\npush es\n);
+      print $exef qq(db 0x26  ; es: prefix\n) if $is_exe;
+      print $exef qq(lds si, [0x2c-2]  ; Environment segment within PSP.\n);
+      print $exef qq(push ss\npop es\n) if $is_exe;
+      print $exef qq($GETARGCV_NASM_CODE);
+      print $exef qq(push ss\npop ds\n) if $is_exe;
+      print $exef qq(call G\$main_\nmov ah, 0x4c  ; dx: argv=NULL; EXIT, exit code in al\nint 0x21\n);
+    } elsif ($entry_point_mode == 3) {
       print $exef qq(call G\$main_\nmov ah, 0x4c  ; EXIT, exit code in al\nint 0x21\n);
     }
     for my $segment_name (@SEGMENT_ORDER) {
@@ -834,21 +942,29 @@ times -(((bss_end-bss_start)+(data_end-data_start)+(code_end-code_start+0x100)+3
       print $exef qq($fullprog_bss\n) if $segment_name eq "_BSS";
       emit_nasm_segment($segment_name, $exef, $segment_sizes{$segment_name}, $ledata{$segment_name}, $segment_symbols{$segment_name}, $fixupp{$segment_name});
     }
+    print $exef qq(argv_bytes: resb 270\nargv_pointers: resb 130\n) if $entry_point_mode == 2;  # Uncleared part of _BSS.
     print $exef qq($fullprog_end\n);
   } else {  # emit_executable.
     my $init_regs = "";
     $init_regs .= "\x16\x1F" if $is_exe and $is_data_used;  # push ss; pop ds
     $init_regs .= "\xFC" if $need_clear_df;  # String instructions (e.g. movsb, stosw) need df=0 (cld).
-    # !! In wcc ABI, we can ruin es, so don't save+restore it.
     my $clear_bss = $do_clear_bss_with_code ? (
-        "\x06" x !(!($is_exe and $lf{start_es_psp})) .  # push es
+        "\x06" x !(!($is_exe and ($entry_point_mode == 2 or $lf{start_es_psp}))) .  # push es  !!! Can we reorder it instead?
         "\x1E\x07" x !(!($is_exe)) .  # push ds;; pop es
         pack("a1va1va4", "\xBF", 0, "\xB9", ($segment_sizes{_BSS} + 1) >> 1, "\x31\xC0\xF3\xAB") .  # Affected by fixups below. mov di, bss_start;; mov cx, (stack-bss_start+1)>>1;; xor ax, ax;; rep stosw
-        "\x07" x !(!($is_exe and $lf{start_es_psp}))) :  # pop es
+        "\x07" x !(!($is_exe and ($entry_point_mode == 2 or $lf{start_es_psp})))) :  # pop es
         $need_clear_ax ? "\x31\xC0" : "";  # xor ax, ax  ; argc=0.
     # $call_main is affected by fixups below.
     my($call_main, $call_main_symbol, $call_main_ofs);
-    if (defined($text_symbol_ofs{"G\$_start_"})) {
+    my $ubss_size = 0;  # Uninitialized BSS.
+    my $add_ubss = sub {  # Adds to uninitialized _BSS.
+      my($symbol, $size) = @_;
+      die "$0: assert: symbol already defined\n" if exists($symbol_ofs{$symbol});
+      $symbol_ofs{$symbol} = $segment_sizes{_BSS} + $ubss_size;
+      push @{$segment_symbols{_BSS}}, [$symbol_ofs{$symbol}, $symbol];
+      $ubss_size += $size;
+    };
+    if ($entry_point_mode == 1) {  # Keep these consistent with the emit_nasm branch above.
       if ($is_exe and $does_entry_point_return) {
         # call _start_;; mov ax, 0x4c00;; int 0x21  ; EXIT with code 0.
         $call_main = pack("ava5", "\xE8", 0, "\xB8\x00\x4C\xCD\x21");
@@ -860,15 +976,23 @@ times -(((bss_end-bss_start)+(data_end-data_start)+(code_end-code_start+0x100)+3
         $call_main = pack("a1v", "\xE9", 0);  # jmp strict word _start_
         $call_main_symbol = "G\$_start_"; $call_main_ofs = length($call_main) - 2;
       }
-    } elsif (defined($text_symbol_ofs{"G\$main_"}) and $do_use_argc) {
+    } elsif ($entry_point_mode == 2) {
       # OpenWatcom wcc does not support non-constant initializers, so we can call
       # main now.
-      # xor dx, dx;; call G$main_;; mov ah, 0x4c;; int 0x21  ; dx: argv=NULL; EXIT, exit code in al
-      $call_main = pack("a3va4", "\x31\xD2\xE8", 0, "\xB4\x4C\xCD\x21");
+      $add_ubss->("argv_bytes", 270);
+      $add_ubss->("argv_pointers", 130);
+      $call_main = "\xBF\x00\x00\xBD\x00\x00\x55\x06";  # mov di, argv_bytes;; mov bp, argv_pointers;; push bp;; push es
+      $call_main .= "\x26" if $is_exe;  # db 0x26  ; es: prefix
+      $call_main .= "\xC5\x36\x2A\x00";  # lds si, [0x2c-2]  ; Environment segment within PSP.
+      $call_main .= "\x16\x07" if $is_exe;  # push ss;; pop es
+      $call_main .= $GETARGCV_8086_CODE;
+      $call_main .= "\x16\x1F" if $is_exe;  # push ss;; pop ds
+      # call G$main_;; mov ah, 0x4c;; int 0x21  ; dx: argv=NULL; EXIT, exit code in al
+      $call_main .= "\xE8\x00\x00\xB4\x4C\xCD\x21";
       $call_main_symbol = "G\$main_"; $call_main_ofs = length($call_main) - 6;
-    } elsif (defined($text_symbol_ofs{"G\$main_"})) {
-      # call main_;; mov ah, 0x4c;; int 0x21  ; EXIT, exit code in al
-      $call_main = pack("a1va4", "\xE8", 0, "\xB4\x4C\xCD\x21");
+    } elsif ($entry_point_mode == 3) {
+      # call G$main_;; mov ah, 0x4c;; int 0x21  ; EXIT, exit code in al
+      $call_main = "\xE8\x00\x00\xB4\x4C\xCD\x21";
       $call_main_symbol = "G\$main_"; $call_main_ofs = length($call_main) - 6;
     }
     my $vofs = ($is_exe ? 8 : 0x100) + length($init_regs) + length($clear_bss);
@@ -891,7 +1015,7 @@ times -(((bss_end-bss_start)+(data_end-data_start)+(code_end-code_start+0x100)+3
       }
     }
     my $data_size = $segment_sizes{CONST} + $segment_sizes{CONST2} + $segment_sizes{_DATA};
-    die "$0: fatal: data too large\n" if $data_size + $segment_sizes{_BSS} > 65535;  # !! Allow 65536, also in nasm.
+    die "$0: fatal: data too large\n" if $data_size + $segment_sizes{_BSS} + $ubss_size > 65535;  # !! Allow 65536, also in nasm.
     die "$0: fatal: code too large\n" if $after_text_vofs > 65535;  # !! Allow 65536, also in nasm.
     die "$0: fatal: code+data too large for .com\n" if !$is_exe and $vofs > 65535;
     my $stack_align_size = ($data_size + $segment_sizes{_BSS}) & 1;
@@ -909,6 +1033,10 @@ times -(((bss_end-bss_start)+(data_end-data_start)+(code_end-code_start+0x100)+3
     if (defined $call_main_ofs) {
       die "$0: assert: unknown entry point: $call_main_symbol\n" if !defined($symbol_vofs{$call_main_symbol});
       substr($call_main, $call_main_ofs, 2) = pack("v", $symbol_vofs{$call_main_symbol} - ($call_main_ofs + 2 + $segment_vofs{call_main}));
+    }
+    if ($entry_point_mode == 2) {
+      substr($call_main, 1, 2) = pack("v", $symbol_vofs{argv_bytes});
+      substr($call_main, 4, 2) = pack("v", $symbol_vofs{argv_pointers});
     }
     # Tiny version of
     # https://github.com/open-watcom/open-watcom-v2/blob/master/bld/clib/startup/a/cstrt086.asm
@@ -1483,7 +1611,7 @@ if ($is_bin) {
   link_executable($is_nasm,  $exefn, $EXT, $nasm_cpu, @objfns);
   # .nasm output ($EXEFN) cannot be used to produce an .obj file again (i.e. nasm -f obj).
   # TODO(pts): Add support for this, preferably autodetection.
-  if ($is_nasm and run_command("nasm", "-f", "bin", "-o", $EXEOUT, $exefn)) {
+  if ($is_nasm and run_command("nasm", "-O0", "-f", "bin", "-o", $EXEOUT, $exefn)) {
     print STDERR "$0: fatal: nasm failed\n"; exit(6);
   }
 } elsif ($PL eq "-cl") {

@@ -66,8 +66,6 @@ dosmc limitations:
   library doesn't have functions which take far pointers.
 * It doesn't support code longer than 64 KiB.
 * It doesn't support 32-bit (i386) code or DOS extenders.
-* It doesn't pass command-line arguments to main (always argc=0 argv=NULL).
-  This will be fixed in the future.
 * It's not possible to run the compilation on DOS yet. To make it happen,
   the dosmc shell script (and its substantial Perl code for linking) has
   to be rewritten in C, and the DOS version of wcc.exe from OpenWatcom V2
@@ -135,11 +133,9 @@ Program entry points for dosmc (choose any):
 * int main(void) { ... }. Return exit code (0 means success).
   Command-line arguments are not parsed or passed.
 * int main(int argc, char **argv) { ... }. Return exit code (0 means success).
-  Command-line arguments are currently stubbed (argc=0, argv=NULL), will be
-  parsed and passed in the future. DOS supports a command-line up to 127
+  DOS supports a command-line up to 127
   bytes (excluding argv[0], the program name). When parsing this, the
-  dosmc C library splits on spaces and tab, except if the entire argument
-  is double-quoted ("); it passes backslashes as is.
+  dosmc C library splits on spaces and tab, ignoring quotes and backslashes.
 
 Global variables without initial value (e.g. `int myvar;') (in segment _BSS)
 are auto-initialized to 0, stack isn't initialized.
