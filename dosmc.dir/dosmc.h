@@ -95,7 +95,6 @@ static inline void eputs(const char *s) {
 }
 
 /* Writes single byte to stdout. Binary safe when redirected. */
-/* TODO(pts): Make it not inline. */
 static void putchar(char c);
 #pragma aux putchar = \
 "mov ah, 2"  /* 0x40 would also work, see eputc */ \
@@ -114,6 +113,26 @@ modify [ ax ];
 parm [ al ] \
 modify [ bx cx dx ];  /* Also modifies cf */
 #endif
+
+/* Writes CRLF ("\r\n") to stdout. */
+static void oputcrlf(void);
+#pragma aux oputcrlf = \
+"mov ah, 2" \
+"mov dl, 13" \
+"int 0x21" \
+"mov dl, 10" \
+"int 0x21" \
+parm [ dl ] \
+modify [ ax ];
+
+/* Writes a '\0'-terminated string + CRLF ("\r\n") to stdout.
+ * The C standard requires "\n" instead of CRLF.
+ * TODO(pts): Make it not inline.
+ */
+static inline void puts(const char *msg) {
+  oputs(msg);
+  oputcrlf();
+}
 
 /* Writes single byte to stderr. Binary safe when redirected. */
 /* TODO(pts): Make it not inline. */

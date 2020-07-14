@@ -139,6 +139,8 @@ Program entry points for dosmc (choose any):
   DOS supports a command-line up to 127
   bytes (excluding argv[0], the program name). When parsing this, the
   dosmc C library splits on spaces and tab, ignoring quotes and backslashes.
+  This adds 114 bytes of argv parsing code. If you don't need argc or argv,
+  use _start to make the executable smaller.
 
 Global variables without initial value (e.g. `int myvar;') (in segment _BSS)
 are auto-initialized to 0, stack isn't initialized.
