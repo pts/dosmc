@@ -12,6 +12,9 @@ Download on Linux and macOS:
   $ cd dosmc
   $ ./dosmc --prepare  # Download executables, set up Docker image if needed.
 
+Alternatively, if you don't have Git installed, you can download and extract
+https://github.com/pts/dosmc/archive/master.zip instead.
+
 Usage:
 
   $ ./dosmc examples/prog.c  # Creates examples/prog.exe .
