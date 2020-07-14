@@ -1,7 +1,60 @@
 #!/bin/sh
 # by pts@fazekas.hu at Sun Jul 12 02:24:43 CEST 2020
-unset D __SCRIPTFN
-__SCRIPTFN="$(readlink "$0" 2>/dev/null)"; test "$__SCRIPTFN" || __SCRIPTFN="$0"
-export __SCRIPTFN; D="${__SCRIPTFN%/*}"/dosmc.dir
-test -f "$D"/perl && PATH="$D:$PATH" && export PATH
-exec perl -- "$D"/dosmc.pl "$@"; exit 1
+unset D P __SCRIPTFN
+D="$(readlink "$0" 2>/dev/null)"; test "$D" || D="$0"; D="${D%/*}"/dosmc.dir
+__SCRIPTFN="$0"; export __SCRIPTFN  # For dosmc.pl.
+if "$D/true.li3" 2>/dev/null; then  # Run on Linux i386 or amd64 natively.
+  P=perl; test -f "$D"/perl && P="$D/perl"
+  exec "$P" -- "$D"/dosmc.pl "$@"; exit 1
+fi
+
+if ! test -x "$D/true.li3"; then
+  if test -f "$D/true.li3"; then
+    echo "$0: fatal: not an executable file: $D/true.li3" >&2
+  else
+    echo "$0: fatal: not found: $D/true.li3" >&2
+  fi
+  exit 1
+fi
+
+# Run it with Docker. Doesn't download any image from Docker Hub.
+test "${D#/}" = "$D" && D="$PWD/$D"  # Needed by Docker.
+unset ID; ID="$(docker image ls -q dosmc-busybox 2>/dev/null)"
+if test $? != 0; then
+  if ! docker help >/dev/null 2>&1; then  # Works without a client connection.
+    echo "$0: fatal: please install Docker first to run dosmc on this system" >&2
+    exit 1
+  fi
+  # This happens e.g. if DOCKER_HOST=0 (unable to connect) is specified.
+  echo "$0: fatal: Docker installed but misconfigured; run: docker version" >&2
+  exit 1
+fi
+if test -z "$ID"; then  # Image not created yet.
+  echo "$0: info: building Docker image dosmc-busybox locally, may take 10s" >&2
+  # This typically takes <3.5 seconds on modern hardware, most time being
+  # spent in `docker build'.
+  if ! test -f "$D/docker/Dockerfile"; then
+    echo "$0: fatal: Dockerfile not found: $D/docker/Dockerfile" >&2
+    exit 1
+  fi
+  if ! test -f "$D/busybox"; then
+    echo "$0: fatal: busybox not found: $D/busybox" >&2
+    exit 1
+  fi
+  rm -f "$D"/docker/busybox || exit "$?"
+  cat <"$D"/busybox >"$D"/docker/busybox || exit "$?"
+  chmod 755 "$D"/docker/busybox || exit "$?"
+  # Undo it later by running: docker image rm dosmc-busybox
+  ID="$(cd "$D/docker" && docker build -q -t dosmc-busybox "$D"/docker)"
+  P="$?"
+  rm -f "$P"/docker/busybox || exit "$?"
+  if test "$P" != 0; then
+    echo "$0: fatal: failed to build Docker image" >&2
+    exit "$P"
+  fi
+  echo "$0: info: Docker image built, running dosmc..." >&2
+fi
+# `docker run' startup takes about 0.5s--1s on modern Linux or macOS.
+# TODO(pts): Speed up subsequent executions by keeping container running.
+exec docker run -v "$PWD:/workdir" -v "$D:/dosmc.dir" -u "$(id -u):$(id -g)" --rm --net=none --pid=host --uts=host -i dosmc-busybox /dosmc.dir/perl /dosmc.dir/dosmc.pl "$@"
+exit 1
