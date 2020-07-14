@@ -10,13 +10,13 @@ Download on Linux and macOS:
 
   $ git clone --depth 1 https://github.com/pts/dosmc
   $ cd dosmc
-  $ ./dosmc  # Downloads executables and sets up Docker image.
+  $ ./dosmc  # Downloads executables and (if needed) sets up Docker image.
 
 Usage:
 
-  $ ./dosmc examples/prog.c  # Creates prog.exe.
+  $ ./dosmc examples/prog.c  # Creates examples/prog.exe .
 
-  $ ./dosmc -mt examples/prog.c  # Creates prog.com.
+  $ ./dosmc -mt examples/prog.c  # Creates examples/prog.com .
 
 To try it, run `dosbox examples' (without the quotes), and within the DOSBox
 window, run prog.exe or prog.com . The expected output is `ZYfghiHello!'
