@@ -1357,7 +1357,7 @@ my $NASM_OBJ_HEADER = q(
 ;uppercase  ; Would also convert labels to uppercase.
 %macro org 1  ; .com file source emulation.
 %if %1!=256
-%error expecting org 0x100 for compatibility with .com file sources
+%error "expecting org 0x100 for compatibility with .com file sources -- to get .bin output, use dosmc -mb"
 times -1 db 0
 %endif
 __LINKER_FLAG(omit_cld)
