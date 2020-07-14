@@ -16,6 +16,7 @@
 #
 # Other TODOs:
 #
+# !! Add addrnd.c with sufficiently long random seed. Library functions needed: read() and write().
 # !! Add option for word alignment of data segments, for speed.
 # !! Add -bt=auto for using .com if it fits to 64 KiB of memory, otherwise using .exe. Also autodetect .bin for a single .nasm source file with non-0x100 org in the beginning.
 # !! Patch `END' to `END ...' in the -cw output. This is hard (needs .obj file modification to add an LPUBDEF) if there is no label for that already.
