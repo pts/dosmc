@@ -3,9 +3,40 @@
 unset D P __SCRIPTFN
 D="$(readlink "$0" 2>/dev/null)"; test "$D" || D="$0"; D="${D%/*}"/dosmc.dir
 __SCRIPTFN="$0"; export __SCRIPTFN  # For dosmc.pl.
-if "$D/true.li3" 2>/dev/null; then  # Run on Linux i386 or amd64 natively.
+if ! test -f "$D/dosmc.pl"; then
+  echo "$0: fatal: file not found, please download full dosmc sources: $D/dosmc.pl" >&2
+  exit 1
+fi
+if "$D/true.li3" 2>/dev/null && test -x "$D"/wcc; then  # Run on Linux i386 or amd64 natively.
   P=perl; test -f "$D"/perl && P="$D/perl"
   exec "$P" -- "$D"/dosmc.pl "$@"; exit 1
+fi
+
+if "$D/true.li3" 2>/dev/null; then
+  echo "$0: info: downloading dosmc executables..." >&2
+  P="${D%/*}"
+  set -ex
+  # time 7z a -sfx../../../../../../../../../../../../../../../../"$HOME"/Downloads/tiny7zx -t7z -mx=7 -md=32m -ms=on dosmc.dir{.sfx.7z,}
+  # time 7z a -sfx../../../../../../../../../../../../../../../../"$HOME"/Downloads/7zConUpx.sfx -t7z -mx=7 -md=32m -ms=on dosmc.dir{.7z.exe,}
+  if ! test -f "$P"/dosmc.dir.linuxi386exec-v1.sfx.7z; then
+    if type wget >/dev/null 2>&1; then  # `type -p' doesn't work with Bash as /bin/sh.
+      wget -nv -O "$P"/dosmc.dir.linuxi386exec-v1.sfx.7z.tmp https://github.com/pts/dosmc/releases/download/executables-v1/dosmc.dir.linuxi386exec-v1.sfx.7z
+    else
+      curl -sSLfo "$P"/dosmc.dir.linuxi386exec-v1.sfx.7z.tmp https://github.com/pts/dosmc/releases/download/executables-v1/dosmc.dir.linuxi386exec-v1.sfx.7z
+    fi
+    chmod 755 -- "$P"/dosmc.dir.linuxi386exec-v1.sfx.7z 2>/dev/null ||:
+    mv -- "$P"/dosmc.dir.linuxi386exec-v1.sfx.7z.tmp "$P"/dosmc.dir.linuxi386exec-v1.sfx.7z
+  fi
+  chmod 755 -- "$P"/dosmc.dir.linuxi386exec-v1.sfx.7z
+  (cd "$P" && ./dosmc.dir.linuxi386exec-v1.sfx.7z -y) || exit "$?"
+  set +ex
+  if test -f "$D"/wcc && test -x "$D"/wcc; then
+    echo "$0: info: download succeeded, running dosmc..." >&2
+    P=perl; test -f "$D"/perl && P="$D/perl"
+    exec "$P" -- "$D"/dosmc.pl "$@"; exit 1
+  fi
+  echo "$0: fatal: extraction of executables failed" >&2
+  exit 1
 fi
 
 if ! test -x "$D/true.li3"; then
@@ -18,7 +49,6 @@ if ! test -x "$D/true.li3"; then
 fi
 
 # Run it with Docker. Doesn't download any image from Docker Hub.
-test "${D#/}" = "$D" && D="$PWD/$D"  # Needed by Docker.
 unset ID; ID="$(docker image ls -q dosmc-busybox 2>/dev/null)"
 if test $? != 0; then
   if ! docker help >/dev/null 2>&1; then  # Works without a client connection.
@@ -29,6 +59,34 @@ if test $? != 0; then
   echo "$0: fatal: Docker installed but misconfigured; run: docker version" >&2
   exit 1
 fi
+if ! test -x "$D"/wcc; then
+  echo "$0: info: downloading dosmc executables..." >&2
+  P="${D%/*}"
+  set -ex
+  # To rebuild:
+  # 1. Remove files git knows about from dosmc.dir. 
+  # 2. chmod 755 dosmc.dir/*
+  # 3. $ tar -Hustar --owner=pts:1000 --group=pts:1000 -czvf dosmc.dir.linuxi386exec-v1.tar.gz dosmc.dir
+  # 4. advdef -z -3 dosmc.dir.linuxi386exec-v1.tar.gz
+  if ! test -f "$P"/dosmc.dir.linuxi386exec-v1.tar.gz; then
+    if type wget >/dev/null 2>&1; then  # `type -p' doesn't work with Bash as /bin/sh.
+      wget -nv -O "$P"/dosmc.dir.linuxi386exec-v1.tar.gz.tmp https://github.com/pts/dosmc/releases/download/executables-v1/dosmc.dir.linuxi386exec-v1.tar.gz
+    else
+      curl -sSLfo "$P"/dosmc.dir.linuxi386exec-v1.tar.gz.tmp https://github.com/pts/dosmc/releases/download/executables-v1/dosmc.dir.linuxi386exec-v1.tar.gz
+    fi
+    chmod 755 -- "$P"/dosmc.dir.linuxi386exec-v1.tar.gz 2>/dev/null ||:
+    mv -- "$P"/dosmc.dir.linuxi386exec-v1.tar.gz.tmp "$P"/dosmc.dir.linuxi386exec-v1.tar.gz
+  fi
+  (cd "$P" && tar xzvf dosmc.dir.linuxi386exec-v1.tar.gz) || exit "$?"
+  set +ex
+  if test -f "$D"/wcc && test -x "$D"/wcc; then
+    echo "$0: info: download succeeded" >&2
+  else
+    echo "$0: fatal: extraction of executables failed" >&2
+    exit 1
+  fi
+fi
+test "${D#/}" = "$D" && D="$PWD/$D"  # Needed by `docker run'.
 if test -z "$ID"; then  # Image not created yet.
   echo "$0: info: building Docker image dosmc-busybox locally, may take 10s" >&2
   # This typically takes <3.5 seconds on modern hardware, most time being

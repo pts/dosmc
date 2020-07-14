@@ -6,11 +6,11 @@ contains and uses the wcc C compiler in OpenWatcom V2 and also NASM, and it
 has its own C library (libc) and custom optimizing linker for tiny
 executable output.
 
-Download on Linux:
+Download on Linux and macOS:
 
   $ git clone --depth 1 https://github.com/pts/dosmc
   $ cd dosmc
-  $ ./download_linuxi386exec.sh
+  $ ./dosmc  # Downloads executables and sets up Docker image.
 
 Usage:
 
@@ -38,11 +38,11 @@ http://github.com/pts/pts-xtiny
 
 dosmc limitations:
 
-* Host build system must be Linux i386 or amd64. (It's possible to make it
+* Host build system must be Linux i386, Linux amd64 or macOS. On macOS,
+  Docker needs to be installed first. (It's possible to make it
   work on other Unix systems on which wcc is available.) Porting to Windows
   (Win32) is underday, proof-of-concept compilation already works. Porting to
-  FreeBSD should be easy (with Linux compatibility `kldload linux'). Porting to
-  macOS could be achieved by creating a Docker image of the Linux port.
+  FreeBSD should be easy (with Linux compatibility `kldload linux').
   Porting to DOS (32-bit, with DOS extenders) may work, but we need Perl
   first: https://perldoc.perl.org/perldos.html , also Perl 5.8.8 has been
   ported: https://www.ibiblio.org/pub/micro/pc-stuff/freedos/files/distributions/1.2/repos/pkg-html/perl.html
