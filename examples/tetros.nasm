@@ -1,7 +1,7 @@
 ;
 ; tetros.nasm: Tetris game that fits into the boot sector.
 ;
-; Compile: ./dosmc -mb -2 examples/tetros.nasm
+; Compile: ./dosmc -mb -1 examples/tetros.nasm
 ; Run: qemu-system-i386 -drive file=examples/tetros.bin,index=0,media=disk,format=raw
 ;
 ; Downloaded from https://github.com/daniel-e/tetros/raw/master/tetros.asm
