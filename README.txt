@@ -10,7 +10,7 @@ Download on Linux and macOS:
 
   $ git clone --depth 1 https://github.com/pts/dosmc
   $ cd dosmc
-  $ ./dosmc  # Downloads executables and (if needed) sets up Docker image.
+  $ ./dosmc --prepare  # Download executables, set up Docker image if needed.
 
 Usage:
 

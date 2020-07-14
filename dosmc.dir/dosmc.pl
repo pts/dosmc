@@ -62,6 +62,26 @@ if (!@ARGV or $ARGV[0] eq "-?" or $ARGV[0] eq "-h" or $ARGV[0] eq "--help" or $A
   exit(@ARGV ? 0 : 1);
 }
 
+# Quote string from Bourne-like shells.
+sub shqe($) {
+  return $_[0] if $_[0]=~/\A[-.\/\w][-.\/\w=]*\Z(?!\n)/;
+  my $s = $_[0];
+  if ($is_win32) {
+    die "$0: fatal: unsupported shell argument: $s\n" if $s =~ y@"@@;
+    qq("$s")
+  } else {
+    $s =~ s@'@'\\''@g;
+    "'$s'"
+  }
+}
+
+if (@ARGV and $ARGV[0] eq "--prepare") {
+  my $prog = shqe($0);
+  my $args = join(" ", map { shqe($_) } @ARGV);
+  print ": prepared $0 $args\n";
+  exit(0);
+}
+
 # --- Linker: Reads .obj files, writes .exe and .com files (for equivalent .nasm files).
 
 # Checks if the entry point contains an instructions to exit immediately,
@@ -1278,19 +1298,6 @@ die "$0: fatal: multiple source file arguments with $PL\n" if !$is_multiple_sour
 delete $ENV{WATCOM};
 delete $ENV{INCLUDE};
 fix_path();
-
-# Quote string from Bourne-like shells.
-sub shqe($) {
-  return $_[0] if $_[0]=~/\A[-.\/\w][-.\/\w=]*\Z(?!\n)/;
-  my $s = $_[0];
-  if ($is_win32) {
-    die "$0: fatal: unsupported shell argument: $s\n" if $s =~ y@"@@;
-    qq("$s")
-  } else {
-    $s =~ s@'@'\\''@g;
-    "'$s'"
-  }
-}
 
 sub print_command(@) {
   my $redirect = "";
