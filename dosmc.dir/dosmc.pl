@@ -12,21 +12,21 @@
 # !! Add disassembler to check that ds is not used in the .exe file, and optimize away `pop ds'. (Without a disassembler, even if _CONST, _CONST2 and _DATA are empty, pointers to local (on-stack) variables may be taken and they won't work.)
 # !! Optimize away unused basic blocks from .text.
 # !! Remove `push dx' and `pop dx' (and other register operations) from examples/hello.com.
+# !! Optimizae away nops if $has_base_fixup.
 #
 # Other TODOs:
 #
 # !! Add option for word alignment of data segments, for speed.
-# !! Make simple_nasm_exe.nasm work with the built-in linker (ds, ss, sp setup is unnecessary, remove that).
 # !! Add -bt=auto for using .com if it fits to 64 KiB of memory, otherwise using .exe. Also autodetect .bin for a single .nasm source file with non-0x100 org in the beginning.
 # !! Patch `END' to `END ...' in the -cw output. This is hard (needs .obj file modification to add an LPUBDEF) if there is no label for that already.
 # !! Add -cm to produce .nasm (from .obj, using db for instructions) which can be used next time to produce an identical executable. This is similar to -cn, but will need `nasm -f obj' and doesn't link .obj files together.
 # !! Cleanup flag to remove .tmp files.
 # !! doc: http://nuclear.mutantstargoat.com/articles/retrocoding/dos01-setup/
+# !! doc: http://alexfru.narod.ru/os/c16/c16.html
 # !! Add instructions to build with wcl and debug info (produces larger .exe), and to use debugger.
 # !! For the Win32 port: port dosmc.dir/preamblew.pm to Win32, or remove packages which don't work.
 # !! Win32 port: Remove \r (fixing line breaks) from wdis output, to make it compatible with Linux.
 # !! Finish Win32 port.
-# !! Add macOS port (will also work on Linux) using Docker.
 # !! Add dosmcdir.mak as an alternative of dosmcdir.pl (build mode).
 # !! Add simple Unix-like shell implemented in Perl for build mode. Don't just use a wrapper around system(...), because syntax of cmd.exe on Win32 is different from /bin/sh on Unix.
 #
@@ -189,23 +189,29 @@ sub is_complicated_8086_code($$$) {
 }
 
 my %LINKER_FLAG_OK = map { $_ => 1 } qw(omit_cld uninitialized_bss start_es_psp force_argc_zero uninitialized_argc);
-my @SEGMENT_ORDER = qw(_TEXT CONST CONST2 _DATA _BSS);  # Constant, OpenWatcom wcc.
+# Constant, OpenWatcom wcc.
+# nasm: GROUP DGROUP CONST CONST2 _DATA _BSS STACK
+# There are both STACK and _STACK mentioned in https://github.com/open-watcom/open-watcom-v2/ and http://read.pudn.com/downloads170/sourcecode/embed/789782/startup/cstart.wsm__.htm . It doesn't matter much which one we choose, se we choose STACK.
+my @SEGMENT_ORDER = qw(_TEXT CONST CONST2 _DATA _BSS STACK);
 my %SEGMENT_NAME_OK = map { $_ => 1 } @SEGMENT_ORDER;
 my %ASM_DATA_OP = (1 => "db", 2 => "dw", 4 => "dd", 8 => "dq");  # Constant, nasm.
 
 sub emit_nasm_segment($$$$$$) {
   my($segment_name, $exef, $size, $data, $symbolsr, $fixupr) = @_;
+  return if $segment_name eq "STACK";
   print $exef "S\$${segment_name}:\n";
   print $exef "SSIZE\$${segment_name} equ $size\n";  # Not needed, just FYI.
 
   # Sort by ofs ascending.
   my @symbols = sort { $a->[0] <=> $b->[0] or $a->[1] cmp $b->[1] } @$symbolsr;
   my $fi = 0; my $si = 0; my $i = 0;  # $fixupr is already sorted.
-  my $is_bss = $segment_name eq "_BSS";
-  my $chunk_sub = $segment_name eq "_BSS" ? sub { my $size = $_[0] - $i; print $exef "resb $size\n"; $i = $_[0]; } : sub {
+  my $is_nobits = ($segment_name eq "_BSS" or $segment_name eq "STACK");
+  my $chunk_sub = $is_nobits ? sub { my $size = $_[0] - $i; print $exef "resb $size\n"; $i = $_[0]; } : sub {
     my $j = $_[0];
     while ($fi < @$fixupr and $fixupr->[$fi][1] < $j) {  # Apply fixup.
       my($endofs, $ofs, $ltypem, $symbol) = @{$fixupr->[$fi++]};
+      die "$0: assert: bad FIXUPP order in segment $segment_name\n" if $ofs <= $i;
+      die "$0: assert: LEDATA shorter than FIXUPP in segment $segment_name\n" if length($data) < $ofs;
       my $line = unpack("H*", substr($data, $i, $ofs - $i)); $line =~ s@(..)(?=.)@$1, 0x@sg; print $exef "db 0x$line\n";
       my $base = sprintf("0x%x", unpack("v", substr($data, $ofs, 2)));
       my $size = $endofs - $ofs;
@@ -214,6 +220,7 @@ sub emit_nasm_segment($$$$$$) {
       $i = $endofs;
     }
     if ($i < $j) {
+      die "$0: assert: LEDATA too short in segment $segment_name\n" if length($data) < $j;
       my $line = unpack("H*", substr($data, $i, $j - $i)); $line =~ s@(..)(?=.)@$1, 0x@sg; print $exef "db 0x$line\n";
       $i = $j;
     }
@@ -349,7 +356,7 @@ sub load_obj($$) {
       my $segment_name = uc($lnames[$segment_name_idx]);
       $segment_name =~ s@\A[_.]+@@;
       $segment_name = "TEXT" if $segment_name eq "CODE";
-      substr($segment_name, 0, 0) = "_" if $segment_name !~ m@\ACONST@;
+      substr($segment_name, 0, 0) = "_" if $segment_name !~ m@\A(CONST|STACK\Z(?!\n))@;
       die "$0: fatal: unsupported segment: $segment_name\n" if !$SEGMENT_NAME_OK{$segment_name};
       #print STDERR "info: SEGDEF $segment_name\n";
       # Example alternative spellings: .bss and _BSS.
@@ -366,6 +373,8 @@ sub load_obj($$) {
       my($segment_idx, $ofs) = unpack("Cv", substr($data, 0, 3));
       die "$0: fatal: unknown segment: $segment_idx\n" if !$segment_idx or $segment_idx >= @segment_names;
       my $segment_name = $segment_names[$segment_idx];
+      die "$0: fatal: LEDATA not allowed in segment $segment_name\n" if
+          $segment_name eq "_BSS" or $segment_name eq "STACK";
       $size -= 3; substr($data, 0, 3) = "";
       #print STDERR "info: LEDATA: $segment_name ofs=$ofs size=$size\n";
       die "$0: fatal: gap in LEDATA for $segment_name\n" if length($ledata{$segment_name}) != $ofs;
@@ -385,6 +394,7 @@ sub load_obj($$) {
       } else {
         die "$0: fatal: unknown segment: $segment_idx\n" if !$segment_idx or $segment_idx >= @segment_names;
         my $segment_name = $segment_names[$segment_idx];
+        die "$0: fatal: symbol not allowd in segment $segment_name\n" if $segment_name eq "STACK";
         for (my $i = 2; $i < $size; $i += 3) {
           my $fsize = vec($data, $i++, 8);
           die "$0: fatal: EOF in $recname entry\n" if $i + $fsize + 3 > $size;
@@ -424,7 +434,8 @@ sub load_obj($$) {
       die "$0: fatal: long LEXTDEF not supported\n";
     } elsif ($type == 0x9c) {  # FIXUPP.
       die "$0: fatal: FIXUPP must follow LEDATA\n" if !defined($last_ofs);
-      die "$0: fatal: FIXUPP not allowed in _BSS" if $last_segment_name eq "_BSS";
+      die "$0: fatal: FIXUPP not allowed in segment $last_segment_name\n" if
+          $last_segment_name eq "_BSS" or $last_segment_name eq "STACK";
       for (my $i = 0; $i < $size; ) {
         die "$0: fatal: EOF in FIXUP header\n" if $i + 3 > $size;
         my ($a, $ofs, $fd) = unpack("CCC", substr($data, $i, 3));
@@ -435,8 +446,8 @@ sub load_obj($$) {
         die "$0: fatal: frame thread not supported\n" if $fd & 0x80;
         die "$0: fatal: target thread not supported\n" if $fd & 8;
         my $is_self = ~($a >> 6) & 1;
-        my $ltype = ($a >> 2) & 15;
-        my $lsize = $ltype == 1 ? 2 : undef;
+        my $ltype = ($a >> 2) & 15;  # 1: offset; 2. base segment.
+        my $lsize = ($ltype == 1 or $ltype == 2) ? 2 : undef;
         die "$0: fatal: unsupported FIXUPP location type: $ltype\n" if !defined($lsize);
         my $ltypem = $is_self ? -$ltype : $ltype;
         $ofs = $last_ofs + ($ofs | ($a & 3) << 8);
@@ -448,18 +459,31 @@ sub load_obj($$) {
         my $fixuppr = $fixupp{$last_segment_name};
         die "$0: fatal: FIXUPP must not overlap\n" if @$fixuppr and $fixuppr->[-1][0] > $ofs;
         my $symbol;
-        if ($frame == 5 and $target == 6) {
+        #print STDERR "info: FIXUPP ltype=$ltype frame=$frame target=$target\n";
+        if (($ltype == 1 and $frame == 5 and $target == 6) or
+            ($ltype == 2 and $frame == 5 and ($target == 4 or $target == 5))) {
           die "$0: fatal: EOF in FIXUPP target\n" if $i >= $size;
-          my $extdef_idx = vec($data, $i++, 8);
-          if ($extdef_idx >= 0x80) {
-            die "$0: fatal: EOF in FIXUPP target 2-byte extdef_idx\n" if $i >= $size;
-            $extdef_idx = ($extdef_idx - 0x80) << 8 | vec($data, $i++, 8);
+          die "$0: fatal: base FIXUPP outside segment _TEXT\n" if $ltype == 2 and $last_segment_name ne "_TEXT";
+          my $itype = $target == 4 ? "SEGDEF" : $target == 5 ? "GRPDEF" : "EXTDEF";
+          my $idx = vec($data, $i++, 8);
+          if ($idx >= 0x80) {
+            die "$0: fatal: EOF in FIXUPP target 2-byte $itype index\n" if $i >= $size;
+            $idx = ($idx - 0x80) << 8 | vec($data, $i++, 8);
           }
-          die "$0: fatal: FIXUPP EXTDEF index is 0\n" if $extdef_idx == 0;
-          die "$0: fatal: unknown FIXUPP EXTDEF index: $extdef_idx\n" if $extdef_idx >= @extdef;
-          $symbol = $extdef[$extdef_idx];
+          die "$0: fatal: FIXUPP $itype index is 0\n" if $idx == 0;
+          if ($target == 4) {
+            die "$0: fatal: unknown FIXUPP $itype index: $idx\n" if $idx >= @segment_names;
+            # SB$CONST is the segment register value,
+            # S$CONST is the byte offset of CONST within DGROUP.
+            $symbol = "SB\$$segment_names[$idx]";
+          } elsif ($target == 5) {
+            $symbol = "SB\$$SEGMENT_ORDER[1]";  # First segment in DGROUP, right after _TEXT.
+          } else {
+            die "$0: fatal: unknown FIXUPP $itype index: $idx\n" if $idx >= @extdef;
+            $symbol = $extdef[$idx];
+          }
           #print STDERR "info: FIXUPP 16-bit $is_self \@$ofs EXTDEF $symbol\n";
-        } elsif (($target == 0 or $target == 4) and (
+        } elsif ($ltype == 1 and ($target == 0 or $target == 4) and (
                   $frame == 1 or  # Segment CONST in DGROUP, by wcc, with $target == 4.
                   $frame == 5 or  # Segment CONST, by nasm, with $target == 4.
                   $frame == 0)) {  # Segment CONST and _BSS, by MASM 4.00, with $target == 4 and $target == 0.
@@ -473,13 +497,15 @@ sub load_obj($$) {
           my $segment_name = $segment_names[$segment_idx];
           #print STDERR "info: FIXUPP 16-bit $is_self \@$ofs SEGMENT $segment_name\n";
           $symbol = "OS\$${segment_name}";
+          die "$0: fatal: stack FIXUPP outside segment _TEXT\n" if
+              $segment_name eq "STACK" and $last_segment_name ne "_TEXT";
           if ($target == 0) {  # 2-byte displacement.
             die "$0: fatal: EOF in FIXUPP displacement\n" if $i + 2 > $size;
             my $dofs = unpack("v", substr($data, $i, 2)); $i += 2;
             substr($ledata{$last_segment_name}, $ofs, 2) = pack("v", unpack("v", substr($ledata{$last_segment_name}, $ofs, 2)) + $dofs) if $dofs;
           }
         } else {
-          die "$0: fatal: unsupported FIXUPP: frame=$frame target=$target\n";
+          die "$0: fatal: unsupported FIXUPP: ltype=$ltype frame=$frame target=$target\n";
         }
         push @$fixuppr, [$endofs, $ofs, $ltypem, $symbol];
       }
@@ -527,6 +553,7 @@ sub load_obj($$) {
       $had_lheadr = 1;
     } elsif ($type == 0x88) {  # COMENT. Also omit from .lib files.
     } elsif ($type == 0x9a) {  # GRPDEF. Also omit from .lib files.
+      # We assume this group is defined: GROUP DGROUP CONST CONST2 _DATA _BSS STACK
     } else {
       # We do not need to support common symbols, wcc never generates them.
       die sprintf("%s: fatal: unsupported obj record type: type=0x%x size=%d\n", $0, $type, $size);
@@ -543,7 +570,7 @@ sub load_obj($$) {
   for my $segment_name (@SEGMENT_ORDER) {
     # Typically $segment_sizes{_BSS} is missing, put it back.
     $segment_sizes{$segment_name} = 0 if !exists($segment_sizes{$segment_name});
-    my $size = $segment_name eq "_BSS" ? 0 : $segment_sizes{$segment_name};
+    my $size = ($segment_name eq "_BSS" or $segment_name eq "STACK") ? 0 : $segment_sizes{$segment_name};
     die "$0: assert: segment size mismatch for $segment_name\n" if
         length($ledata{$segment_name}) != $size;
   }
@@ -675,7 +702,7 @@ sub link_executable($$$$@) {
   my %ledata = map { $_ => "" } @SEGMENT_ORDER;  # $segment_name => $ledata_str.
   my %fixupp = map { $_ => [] } @SEGMENT_ORDER;  # $segment_name => [[$endofs, $ofs, $ltypem, $symbol], ...].
   my %segment_sizes = map { $_ => 0 } @SEGMENT_ORDER;  # $segment_name => $byte_size.
-  my $has_string_instructions = 0;
+  my $has_string_instructions = 0; my $has_base_fixup = 0; my $has_stack_fixup = 0;
   my $do_use_argc = 0;
   my @objs;
   my $objfni = 0;
@@ -755,14 +782,20 @@ sub link_executable($$$$@) {
             delete $undefined_symbols{$symbol};
           }
         }
-        my $datar = \$obj_ledata->{$segment_name};
-        for my $fixup (@{$obj_fixupp->{$segment_name}}) {  # Apply fixups.
+        my $datar = \$obj_ledata->{$segment_name}; my $size = $obj_segment_sizes->{$segment_name};
+        for my $fixup (@{$obj_fixupp->{$segment_name}}) {  # Preprocess fixups.
           my($endofs, $ofs, $ltypem, $symbol) = @$fixup;
+          $has_base_fixup = 1 if $symbol =~ m@\ASB\$@;
           substr($$datar, $ofs, 2) = pack("v", unpack("v", substr($$datar, $ofs, 2)) + $old_segment_sizes{$1}) if $symbol =~ s@\AOS\$(?=(.*))@S\$@s;
+          $has_stack_fixup = 1 if $symbol eq "S\$STACK";  # Was OS$STACK just above.
           push @$fixupr, [$endofs + $segment_ofs, $ofs + $segment_ofs, $ltypem, $symbol];
         }
         $ledata{$segment_name} .= $$datar;
-        $segment_sizes{$segment_name} += $obj_segment_sizes->{$segment_name};
+        if ($segment_name ne "STACK") {
+          $segment_sizes{$segment_name} += $size;
+        } elsif ($segment_sizes{$segment_name} < $size) {
+          $segment_sizes{$segment_name} = $size;  # Maximum.
+        }
       }
       for my $symbol (sort keys %$obj_undefined_symbols) {
         if ($symbol =~ s@\AG\$__LINKER_FLAG_@@i) {  # Created by __LINKER_FLAG($symbol) in .c and .nasm files.
@@ -827,6 +860,46 @@ sub link_executable($$$$@) {
     $segment_sizes{_TEXT} = length($ledata{_TEXT});
   }
 
+  if ($has_stack_fixup or $has_base_fixup) {
+    if (defined($text_symbol_ofs{"G\$_start_"})) {
+      my %sb_symbols = qw(SB$CONST 1 SB$CONST2 1 SB$_DATA 1 SB$STACK 1);
+      my $i = $text_symbol_ofs{"G\$_start_"};
+      my $datar = \$ledata{_TEXT};
+      my $fixupr = $fixupp{_TEXT};
+      pos($$datar) = $i;
+      my $kind = 0;
+      if (($$datar =~ m@\G\xB8..\x8E\xD8\xB8..\x8E\xD0\xBC..@smg and @$fixupr >= 3 and  # mov ax, ?;; mov ds, ax;; mov ax, ?;; mov ss, ax;; mov sp, ?
+           $fixupr->[0][1] == 1 and exists($sb_symbols{$fixupr->[0][3]}) and
+           $fixupr->[1][1] == 6 and exists($sb_symbols{$fixupr->[1][3]}) and
+           $fixupr->[2][1] == 11 and $fixupr->[2][3] eq "S\$STACK" and ($kind = 1)) or
+          ($$datar =~ m@\G\xB8..\x8E\xD0\xBC..\xB8..\x8E\xD8@smg and @$fixupr >= 3 and  # mov ax, ?;; mov ss, ax;; mov sp, ?;; mov ax, ?;; mov ds, ax
+           $fixupr->[0][1] == 1 and exists($sb_symbols{$fixupr->[0][3]}) and
+           $fixupr->[2][1] == 9 and exists($sb_symbols{$fixupr->[2][3]}) and
+           $fixupr->[1][1] == 6 and $fixupr->[1][3] eq "S\$STACK" and ($kind = 2)) or
+          ($$datar =~ m@\G\xB8..\x8E\xD8\x8E\xD0\xBC..@smg and @$fixupr >= 2 and  # mov ax, ?;; mov ds, ax;; mov ss, ax;; mov sp, ?
+           $fixupr->[0][1] == 1 and exists($sb_symbols{$fixupr->[0][3]}) and
+           $fixupr->[1][1] == 8 and $fixupr->[1][3] eq "S\$STACK" and ($kind = 3)) or
+          ($$datar =~ m@\G\xB8..\x8E\xD0\xBC..\x8E\xD8@smg and @$fixupr >= 3 and  # mov ax, ?;; mov ss, ax;; mov sp, ?;; mov ds, ax
+           $fixupr->[0][1] == 1 and exists($sb_symbols{$fixupr->[0][3]}) and
+           $fixupr->[1][1] == 6 and $fixupr->[1][3] eq "S\$STACK" and ($kind = 4))) {
+        my $size = pos($$datar) - $i;
+        substr($$datar, $i, $size) = "\x90" x $size;  # nop
+        # !! By disassembly of _TEXT, prove that there are no jumps to within $i .. $i + $size, thus the initial nops can be replaced with just mov ax, ss;; mov sp, ?.
+        substr($$datar, $i, 2) = "\x8C\xD0";  # mov ax, ss
+        substr($$datar, $i + 5, 2) = "\x8C\xD0" if $kind == 1;  # mov ax, ss
+        substr($$datar, $i + 8, 2) = "\x8C\xD0" if $kind == 2;  # mov ax, ss
+        substr($$datar, $i + (($kind == 1 or $kind == 3) ? $size - 3 : $kind == 2 ? $size - 8 : $size - 5), 1) = "\xBC";  # Keep the mov sp, ?.
+        splice @$fixupr, 0, ($kind > 2 ?  1 : 2);  # Remove 1..2 fixups, keep the S\$STACK fixup.
+      }
+      my $stack_size_data = pack("v", $segment_sizes{STACK});
+      for my $fixup (@$fixupr) {
+        my($endofs, $ofs, $ltypem, $symbol) = @$fixup;
+        substr($$datar, $ofs, 2) = "\0\0" if $symbol eq "S\$STACK" and $ltypem == 1;  # Always 1, it's offset. Set displacement to 0.
+        die "$0: fatal: general segment-base fixup unsupoorted: $1\n" if $symbol =~ m@\ASB\$(.*)@s;
+      }
+    }
+  }
+
   my $does_entry_point_return = !defined($exit_code);  # TODO(pts): Smarter detection.
   my $is_data_used = !defined($exit_code);
   my $entry_point_mode = defined($text_symbol_ofs{"G\$_start_"}) ? 1 : (defined($text_symbol_ofs{"G\$main_"}) and $do_use_argc) ? 2 : defined($text_symbol_ofs{"G\$main_"}) ? 3 : 0;
@@ -840,8 +913,8 @@ sub link_executable($$$$@) {
   # _DATA comes before _BSS in @SEGMENT_ORDER, move all (\0) bytes from _BSS to _DATA.
   if (!$lf{uninitialized_bss} and !$do_clear_bss_with_code) { $ledata{_DATA} .= "\0" x $segment_sizes{_BSS}; $segment_sizes{_DATA} += $segment_sizes{_BSS}; $segment_sizes{_BSS} = 0; }
   for my $segment_name (@SEGMENT_ORDER) {
-    die "$0: assert: segment size mismatch for $segment_name\n" if
-        length($ledata{$segment_name}) != ($segment_name eq "_BSS" ? 0 : $segment_sizes{$segment_name});
+    my $size = ($segment_name eq "_BSS" or $segment_name eq "STACK") ? 0 : $segment_sizes{$segment_name};
+    die "$0: assert: output segment size mismatch for $segment_name\n" if length($ledata{$segment_name}) != $size;
   }
 
   my $exef;  # May be of .com, .exe or .nasm format.
@@ -853,6 +926,7 @@ sub link_executable($$$$@) {
     # No need to disambiguate NASM symbols like code_end, because
     # wcc adds _ prefix or suffix to all symbols (including static ones).
     if ($is_exe) {
+      my $stack_size_expr = ($segment_sizes{STACK} or "65534-((auto_stack_aligned-bss_start)+(data_end-data_start)+((code_end-code_startseg)&15))");
 # Based on https://github.com/pts/pts-nasm-fullprog/blob/master/fullprog_dosexe.inc.nasm
 $fullprog_code = q(
 section .text align=1 vstart=-0x10
@@ -887,18 +961,20 @@ data_end:
 section .bss align=1  ; vstart=0
 bss_start:
 );
-$fullprog_end = q(
+$fullprog_end = qq(
 auto_stack:  ; Autodetect stack size to fill data segment to 65535 bytes.
-resb ((auto_stack-bss_start)+(data_end-data_start))&1  ; Word-align stack, for speed.
+resb ((auto_stack-bss_start)+(data_end-data_start)+(code_end-code_startseg))&1  ; Word-align stack, for speed.
 auto_stack_aligned:
-%define stack_size (65534-((auto_stack_aligned-bss_start)+(data_end-data_start)))
+%define stack_size ($stack_size_expr)
 times (stack_size-10)>>256 resb 0  ; Assert that stack size is at least 10.
 stack: resb stack_size
+S\$STACK:
 bss_end:
 ; Fails with `error: TIMES value -... is negative` if data is too large (>~64 KiB).
 times -(((bss_end-bss_start)+(data_end-data_start))>>16) db 0
 );
     } else {  # .com
+      my $stack_size_expr = ($segment_sizes{STACK} or "65535-3-((auto_stack_aligned-bss_start)+(data_end-data_start)+((code_end-code_start+0x100)&15))");
 # Based on https://github.com/pts/pts-nasm-fullprog/blob/master/fullprog_dosexe.inc.nasm
 $fullprog_code = q(
 section .text align=1 vstart=0x100  ; org 0x100
@@ -916,12 +992,15 @@ data_end:
 section .bss align=1  ; vstart=0
 bss_start:
 );
-$fullprog_end = q(
+$fullprog_end = qq(
 auto_stack:  ; Autodetect stack size to fill main segment to almost 65535 bytes.
-%define stack_size (65535-3-((auto_stack-bss_start)+(data_end-data_start)+(code_end-code_start+0x100)))
+resb ((auto_stack-bss_start)+(data_end-data_start)+(code_end-code_start+0x100))&1  ; Word-align stack, for speed.
+auto_stack_aligned:
+%define stack_size ($stack_size_expr)
 times (stack_size-10)>>256 resb 0  ; Assert that stack size is at least 10.
 ; This is fake, end of stack depends on DOS, typically sp==0xfffe or sp==0xfffc.
 stack: resb stack_size
+S\$STACK:
 bss_end:
 call__fullprog_end:  ; Make fullprog_code without fullprog_end fail.
 ; Fails with `error: TIMES value -... is negative` if data is too large (>~64 KiB).
@@ -983,7 +1062,7 @@ times -(((bss_end-bss_start)+(data_end-data_start)+(code_end-code_start+0x100)+3
     $init_regs .= "\x16\x1F" if $is_exe and $is_data_used;  # push ss; pop ds
     $init_regs .= "\xFC" if $need_clear_df;  # String instructions (e.g. movsb, stosw) need df=0 (cld).
     my $clear_bss = $do_clear_bss_with_code ? (
-        "\x06" x !(!($is_exe and ($entry_point_mode == 2 or $lf{start_es_psp}))) .  # push es  !!! Can we reorder it instead?
+        "\x06" x !(!($is_exe and ($entry_point_mode == 2 or $lf{start_es_psp}))) .  # push es  !! TODO(pts): For $entry_point_mode == 2, put the argv parsing before $clear_bss, thus $clear_bss will be allowed to modify es.
         "\x1E\x07" x !(!($is_exe)) .  # push ds;; pop es
         pack("a1va1va4", "\xBF", 0, "\xB9", ($segment_sizes{_BSS} + 1) >> 1, "\x31\xC0\xF3\xAB") .  # Affected by fixups below. mov di, bss_start;; mov cx, (stack-bss_start+1)>>1;; xor ax, ax;; rep stosw
         "\x07" x !(!($is_exe and ($entry_point_mode == 2 or $lf{start_es_psp})))) :  # pop es
@@ -1035,17 +1114,28 @@ times -(((bss_end-bss_start)+(data_end-data_start)+(code_end-code_start+0x100)+3
       $call_main = "\xE8\x00\x00\xB4\x4C\xCD\x21";
       $call_main_symbol = "G\$main_"; $call_main_ofs = length($call_main) - 6;
     }
-    my $vofs = ($is_exe ? 8 : 0x100) + length($init_regs) + length($clear_bss);
+    my $vofs_base = ($is_exe ? 8 : 0x100) + length($init_regs) + length($clear_bss);
+    my $after_text_vofs = $vofs_base + length($call_main) + length($ledata{_TEXT});
+    my $data_size = $segment_sizes{CONST} + $segment_sizes{CONST2} + $segment_sizes{_DATA};
+    die "$0: fatal: data too large\n" if $data_size + $segment_sizes{_BSS} + $ubss_size > 65535;  # !! Allow 65536, also in nasm.
+    die "$0: fatal: code too large\n" if $after_text_vofs > 65535;  # !! Allow 65536, also in nasm.
+    die "$0: fatal: code+data too large for .com\n" if !$is_exe and $after_text_vofs + $data_size + $segment_sizes{_BSS} > 65535;
+    my $stack_align_size = ($after_text_vofs + $data_size + $segment_sizes{_BSS}) & 1;
+    my $stack_size_auto = 65534 - ($data_size + $segment_sizes{_BSS} + ($is_exe ? 0 : 2 + $after_text_vofs) + $stack_align_size);
+    die "$0: assert: bad stack_size_auto\n"  if $is_exe and $data_size + $segment_sizes{_BSS} + $stack_align_size + $stack_size_auto != 65534;
+    my $stack_size = ($segment_sizes{STACK} or $stack_size_auto);  # If STACK segment specified, use its size, otherwise fill stack to make DGROUP ~64 KiB long.
+    die "$0: fatal: stack too small (code and data too large)\n" if $stack_size < 10;
     my %segment_vofs;
+    my $vofs = $vofs_base;
     $segment_vofs{call_main} = $vofs; $vofs += length($call_main);  # For the relocation below.
     $segment_vofs{_TEXT} = $vofs; $vofs += length($ledata{_TEXT});
-    my $after_text_vofs = $vofs;
     $vofs &= 15 if $is_exe;
     my $dgroup_vofs = $segment_vofs{CONST} = $vofs; $vofs += length($ledata{CONST});  # String literals in CONST.
     $segment_vofs{CONST2} = $vofs; $vofs += length($ledata{CONST2});
     $segment_vofs{_DATA} = $vofs; $vofs += length($ledata{_DATA});
     $segment_vofs{_BSS} = $vofs; $vofs += $segment_sizes{_BSS};
-    my %symbol_vofs;  # $symbol => $vofs + $obj_ofs.
+    $segment_vofs{STACK} = $vofs + $stack_align_size + $stack_size; $vofs = undef;
+    my %symbol_vofs;  # $symbol => $segment_vofs + $obj_ofs.
     for my $segment_name (keys %segment_symbols) {
       my $this_segment_vofs = $segment_vofs{$segment_name};
       $symbol_vofs{"S\$${segment_name}"} = $this_segment_vofs;
@@ -1054,14 +1144,6 @@ times -(((bss_end-bss_start)+(data_end-data_start)+(code_end-code_start+0x100)+3
         $symbol_vofs{$symbol} = $this_segment_vofs + $ofs;
       }
     }
-    my $data_size = $segment_sizes{CONST} + $segment_sizes{CONST2} + $segment_sizes{_DATA};
-    die "$0: fatal: data too large\n" if $data_size + $segment_sizes{_BSS} + $ubss_size > 65535;  # !! Allow 65536, also in nasm.
-    die "$0: fatal: code too large\n" if $after_text_vofs > 65535;  # !! Allow 65536, also in nasm.
-    die "$0: fatal: code+data too large for .com\n" if !$is_exe and $vofs > 65535;
-    my $stack_align_size = ($data_size + $segment_sizes{_BSS}) & 1;
-    my $stack_size = 65535 - (($data_size + $segment_sizes{_BSS} + ($is_exe ? 0 : 2 + $after_text_vofs) + 1) | 1);
-    die "$0: fatal: stack too small (code and data too large)\n" if $stack_size < 10;
-    die "$0: assert: bad stack size\n"  if $is_exe and $data_size + $segment_sizes{_BSS} + $stack_align_size + $stack_size != 65534;
     if ($is_exe) {
       my $image_size = 24 + length($init_regs) + length($clear_bss) + length($call_main) + $segment_sizes{_TEXT} + $data_size;
       my $exe_header = pack("a2v11", "MZ", $image_size & 511, ($image_size + 511) >> 9, 0, 1,
@@ -1082,7 +1164,7 @@ times -(((bss_end-bss_start)+(data_end-data_start)+(code_end-code_start+0x100)+3
     # https://github.com/open-watcom/open-watcom-v2/blob/master/bld/clib/startup/a/cstrt086.asm
     print $exef $init_regs, $clear_bss, $call_main;
     for my $segment_name (@SEGMENT_ORDER) {
-      my $data = $ledata{$segment_name};
+      my $data = $ledata{$segment_name};  # TODO(pts): Use reference to avoid copy.
       my $this_segment_vofs = $segment_vofs{$segment_name};
       for my $fixup (@{$fixupp{$segment_name}}) {  # Apply fixups.
         my($endofs, $ofs, $ltypem, $symbol) = @$fixup;
@@ -1374,7 +1456,7 @@ segment _BSS class=BSS align=1
 segment _DATA class=DATA align=1
 segment CONST class=DATA align=1
 segment CONST2 class=DATA align=1
-;segment STACK class=STACK align=2
+segment STACK class=STACK align=2
 segment _TEXT  ; Select default.
 
 ; The purpose of this magic (of redefining `segment' and `section') is to
@@ -1383,10 +1465,43 @@ segment _TEXT  ; Select default.
 ; of segment: ignoring' when `segment .bss align=1' is present in the .nasm
 ; file (it will be transformed to just `segment .bss', which prevents the
 ; warning).
+
+%define group __OBJ_GROUP__
+%define GROUP __OBJ_GROUP__
+%macro __OBJ_GROUP__ 1+
+%undef group
+%undef __GRPTRY_dgroup
+%undef __GRPTRY_DGROUP
+%define __GRPTRY_%1  ; Ignores everything after the first whitespace in %1.
+%if 0
+%elifdef __GRPTRY_dgroup
+group DGROUP CONST CONST2 _DATA _BSS STACK
+dgroup equ DGROUP
+%elifdef __GRPTRY_DGROUP
+group DGROUP CONST CONST2 _DATA _BSS STACK
+%else
+group %1
+%endif
+%define group __OBJ_GROUP__
+%endmacro
+
 %define segment __OBJ_SEGMENT__
 %define section __OBJ_SEGMENT__
 %define SEGMENT __OBJ_SEGMENT__  ; FYI In NASM 0.99.06 .. 2.14.02, this still produces an error for mixed-case segMent etc.: error: unrecognised directive [__OBJ_SEGMENT__]
 %define SECTION __OBJ_SEGMENT__
+%define __SEGDEF__TEXT
+%define __SEGDEF__BSS
+%define __SEGDEF__DATA
+%define __SEGDEF_CONST
+%define __SEGDEF_CONST2
+%define __SEGDEF_STACK
+%macro __SEGMENTCI__ 2  ; Case-insensitive segment activation.
+segment %1
+%ifndef __SEGDEF_%2  ; Prevent the symbol ... redefined error in equ below.
+%define __SEGDEF_%2
+%2 equ %1
+%endif
+%endmacro
 %macro __OBJ_SEGMENT__ 1
 %undef __SEGTRY_unchanged
 %undef __SEGTRY_.text
@@ -1442,104 +1557,105 @@ segment _TEXT  ; Select default.
 %define segment segment  ; Use original meaning of the segment directive below to select segment.
 %ifdef __SEGTRY_unchanged
 %elifdef __SEGTRY_.text
-segment _TEXT
+__SEGMENTCI__ _TEXT, .text
 %elifdef __SEGTRY_.TEXT
-segment _TEXT
+__SEGMENTCI__ _TEXT, .TEXT
 %elifdef __SEGTRY__text
-segment _TEXT
+__SEGMENTCI__ _TEXT, _text
 %elifdef __SEGTRY__TEXT
-segment _TEXT
+__SEGMENTCI__ _TEXT, _TEXT
 %elifdef __SEGTRY_text
-segment _TEXT
+__SEGMENTCI__ _TEXT, text
 %elifdef __SEGTRY_TEXT
-segment _TEXT
+__SEGMENTCI__ _TEXT, TEXT
 %elifdef __SEGTRY_.code
-segment _TEXT
+__SEGMENTCI__ _TEXT, .code
 %elifdef __SEGTRY_.CODE
-segment _TEXT
+__SEGMENTCI__ _TEXT, .CODE
 %elifdef __SEGTRY__code
-segment _TEXT
+__SEGMENTCI__ _TEXT, _code
 %elifdef __SEGTRY__CODE
-segment _TEXT
+__SEGMENTCI__ _TEXT, _CODE
 %elifdef __SEGTRY_code
-segment _TEXT
+__SEGMENTCI__ _TEXT, code
 %elifdef __SEGTRY_CODE
-segment _TEXT
+__SEGMENTCI__ _TEXT, CODE
 %elifdef __SEGTRY_.bss
-segment _BSS
+__SEGMENTCI__ _BSS, .bss
 %elifdef __SEGTRY_.BSS
-segment _BSS
+__SEGMENTCI__ _BSS, .BSS
 %elifdef __SEGTRY__bss
-segment _BSS
+__SEGMENTCI__ _BSS, _bss
 %elifdef __SEGTRY__BSS
-segment _BSS
+__SEGMENTCI__ _BSS, _BSS
 %elifdef __SEGTRY_bss
-segment _BSS
+__SEGMENTCI__ _BSS, bss
 %elifdef __SEGTRY_BSS
-segment _BSS
+__SEGMENTCI__ _BSS, BSS
 %elifdef __SEGTRY_.stack
-segment STACK
+__SEGMENTCI__ STACK, .stack
 %elifdef __SEGTRY_.STACK
-segment STACK
+__SEGMENTCI__ STACK, .STACK
 %elifdef __SEGTRY__stack
-segment STACK
+__SEGMENTCI__ STACK, _stack
 %elifdef __SEGTRY__STACK
-segment STACK
+__SEGMENTCI__ STACK, _STACK
 %elifdef __SEGTRY_stack
-segment STACK
+__SEGMENTCI__ STACK, stack
 %elifdef __SEGTRY_STACK
-segment STACK
+__SEGMENTCI__ STACK, STACK
 %elifdef __SEGTRY_.data
-segment _DATA
+__SEGMENTCI__ _DATA, .data
 %elifdef __SEGTRY_.DATA
-segment _DATA
+__SEGMENTCI__ _DATA, .DATA
 %elifdef __SEGTRY__data
-segment _DATA
+__SEGMENTCI__ _DATA, _data
 %elifdef __SEGTRY__DATA
-segment _DATA
+__SEGMENTCI__ _DATA, _DATA
 %elifdef __SEGTRY_data
-segment _DATA
+__SEGMENTCI__ _DATA, data
 %elifdef __SEGTRY_DATA
-segment _DATA
+__SEGMENTCI__ _DATA, DATA
 %elifdef __SEGTRY_.const
-segment CONST
+__SEGMENTCI__ CONST, .const
 %elifdef __SEGTRY_.CONST
-segment CONST
+__SEGMENTCI__ CONST, .CONST
 %elifdef __SEGTRY__const
-segment CONST
+__SEGMENTCI__ CONST, _const
 %elifdef __SEGTRY__CONST
-segment CONST
+__SEGMENTCI__ CONST, _CONST
 %elifdef __SEGTRY_const
-segment CONST
+__SEGMENTCI__ CONST, const
 %elifdef __SEGTRY_CONST
-segment CONST
+__SEGMENTCI__ CONST, CONST
 %elifdef __SEGTRY_.const2
-segment CONST2
+__SEGMENTCI__ CONST2, .const2
 %elifdef __SEGTRY_.CONST2
-segment CONST2
+__SEGMENTCI__ CONST2, .CONST2
 %elifdef __SEGTRY__const2
-segment CONST2
+__SEGMENTCI__ CONST2, _const2
 %elifdef __SEGTRY__CONST2
-segment CONST2
+__SEGMENTCI__ CONST2, _CONST2
 %elifdef __SEGTRY_const2
-segment CONST2
+__SEGMENTCI__ CONST2, const2
 %elifdef __SEGTRY_CONST2
-segment CONST2
+__SEGMENTCI__ CONST2, CONST2
 %elifdef __SEGTRY_.rodata
-segment CONST2
+__SEGMENTCI__ CONST2, .rodata
 %elifdef __SEGTRY_.RODATA
-segment CONST2
+__SEGMENTCI__ CONST2, .RODATA
 %elifdef __SEGTRY__rodata
-segment CONST2
+__SEGMENTCI__ CONST2, _rodata
 %elifdef __SEGTRY__RODATA
-segment CONST2
+__SEGMENTCI__ CONST2, _RODATA
 %elifdef __SEGTRY_rodata
-segment CONST2
+__SEGMENTCI__ CONST2, rodata
 %elifdef __SEGTRY_RODATA
-segment CONST2
+__SEGMENTCI__ CONST2, RODATA
 %else
 ; %1 may also include segment attributes (e.g. class=CODE align=1), which
-; %nasm ignores with a warning if called again for the same segment.
+; nasm ignores with a warning if called again for the same segment.
+; link_executable() will fail for this, indicating an unknown segment.
 segment %1
 %endif
 %undef  segment
