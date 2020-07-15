@@ -1414,7 +1414,7 @@ sub run_command(@) {
 
 # Detects assembly language, returns "wasm" or "nasm".
 sub detect_asm($) {
-  my $asmfn = $ARGV[0];
+  my $asmfn = $_[0];
   my $f;
   die "$0: fatal: cannot open .asm file for reading: $asmfn\n" if !open($f, "<", $asmfn);
   binmode($f);  # Would also work without it, but be deterministc.
