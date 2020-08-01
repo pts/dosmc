@@ -10,6 +10,13 @@ mov ds, ax
 xor si, si
 mov ah, 2  ; PUTCHAR(dl).
 
+%macro print_crlf 0
+mov dl, 13
+int 0x21
+mov dl, 10
+int 0x21
+%endmacro
+
 ; Print environment entries.
 next_entry:
 cmp byte [si], 0
@@ -22,10 +29,7 @@ jz end_entry
 int 0x21
 jmp short next_char
 end_entry:
-mov dl, 13
-int 0x21
-mov dl, 10
-int 0x21
+print_crlf
 jmp short next_entry
 end_entries:
 inc si  ; Skip over '\0'.
@@ -33,6 +37,7 @@ inc si  ; Skip over a single byte.
 inc si  ; Skip over '\0'.
 
 ; Print the program name. It will be absolute pathname with the file extension (.EXE or .COM).
+print_crlf
 next_char2:
 mov dl, [si]
 inc si
@@ -41,10 +46,7 @@ jz end_name2
 int 0x21
 jmp short next_char2
 end_name2:
-mov dl, 13
-int 0x21
-mov dl, 10
-int 0x21
+print_crlf
 
 ; Print the command-line.
 ; Both FreeDOS and DOSBox pass whitespace verbatim with multiplicity, can be spaces and tabs.
@@ -75,9 +77,6 @@ jmp short next_char3
 end_cmdline3:
 mov dl, ')'
 int 0x21
-mov dl, 13
-int 0x21
-mov dl, 10
-int 0x21
+print_crlf
 
 ret
