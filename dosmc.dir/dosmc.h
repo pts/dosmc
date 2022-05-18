@@ -21,7 +21,7 @@
  * Example: __LINKER_FLAG(start_es_psp)
  *   to make es:0 point to the PSP (Program Segment Prefix) at the entry
  *   point. Not enabled by default, because in the Watcom calling convention
- *   functions can modify es any time without restoring it.
+ *   functions can modify es any time without restoring it. !! Really, where is this (es) documented?
  * Example: __LINKER_FLAG(force_argc_zero)
  *   Force argc=0 and argv=NULL for main, no matter what was speficied in
  *   the command line. This makes the executable shorter. Alternatively, you
@@ -32,7 +32,6 @@
  *   even more savings.
  */
 #define __LINKER_FLAG(name) extern int _linker_flag_##name; __PRAGMA(extref _linker_flag_##name)
-
 
 /* Writes a $-delimited string to stdout. You may want to create msg with
  * STRING_WITHOUT_NUL to save 1 byte.
@@ -83,6 +82,19 @@ static void fdputs(int fd, const char *s);
 "int 0x21" \
 parm [ bx ] [ di ] \
 modify [ ax cx dx di ];  /* Also modifies cf */
+
+/* TODO(pts): Make it not inline, in case it's called multiple times. */
+/* This implementation is optimized for size. */
+unsigned strlen(const char *s);
+static unsigned strlen_inline(const char *s);
+#pragma aux strlen_inline = \
+"mov ax, -1" \
+"again: cmp byte ptr [si], 1" \
+"inc si" \
+"inc ax" \
+"jnc again" \
+parm [ si ] \
+modify [ si ];
 
 /* Writes a '\0'-terminated string to stdout. */
 static inline void oputs(const char *s) {
