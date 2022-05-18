@@ -56,9 +56,11 @@ if (!@ARGV or $ARGV[0] eq "-?" or $ARGV[0] eq "-h" or $ARGV[0] eq "--help" or $A
   print "This is free software, GNU GPL >=2.0. There is NO WARRANTY. Use at your risk.\n";
   print "Usage: $0 [<compiler-flag> ...] <source-file> [...]\n";
   print "Usage: $0 <perl-script> [...]\n";
+  print "Usage: $0 <subcommand> [...]\n";
   print "Usage: $0 <directory> [...]  # Build with dosmcdir.pl\n";
   print "To compile DOS .exe, specify no flag. To compile DOS .com, specify -bt=com\n";
   print "Supported <source-file> types: .c, .nasm, .wasm, .asm, .obj, .lib\n";
+  print "Example <subcommand>s: nasm, ndisasm, wdis, dmpobj, wcc, wcl, wlink, wmake, wtouch\n";
   print "See details on https://github.com/pts/dosmc\n";
   exit(@ARGV ? 0 : 1);
 }
@@ -1204,7 +1206,7 @@ sub fix_path() {
   }
 }
 
-sub find_perl_script($;$) {
+sub find_subcommand_or_perl_script($;$) {
   my ($script, $is_dir_ok) = @_;
   # Only find explicitly specified directories, don't try $MYDIR.
   if ($is_dir_ok and -d($script)) { return \$script }
@@ -1213,13 +1215,20 @@ sub find_perl_script($;$) {
   my $extdir;
   my @prefixes = $script =~ m@\A(?:[.]/|[.][.]/|[/])@ ? ("") :  # TODO(pts): Port this to Win32.
       (defined($extdir = $ENV{DOSMCEXT}) and length($extdir)) ? ("$extdir/") : ("$MYDIR/");
+  my $has_dot = index($script, ".") >= 0;
+  my @exts = $has_dot ? () : $is_win32 ? qw(.pl .exe .cmd) : qw(.pl .elf .sh);
   for my $prefix (@prefixes) {
     my $fn = $prefix . $script;
     if (-f($fn)) { return $fn }
     #if ($is_dir_ok and -d(_)) { return \$fn }
-    $fn .= ".pl"; if (-f($fn)) { return $fn }
+    if (!$has_dot) {
+      my $fn0 = $fn;
+      for my $ext (@exts) {
+        $fn = $fn0 . $ext; if (-f($fn)) { return $fn }
+      }
+    }
   }
-  die "$0: fatal: Perl script not found: $script\n";
+  die "$0: fatal: command or Perl script not found: $script\n";
 }
 
 # Can be called multiple times, result will be idempotent (on @INC etc.).
@@ -1238,18 +1247,46 @@ sub run_found_perl_script {
   $result
 }
 
+sub run_found_subcommand_or_perl_script {
+  my $fn = shift(@_);
+  my $f;
+  my $is_command = $fn =~ m@[.]p[lm]\Z(?!\n)@i ? 0 : $fn =~ m@[.][^./]+\Z(?!\n)@ ? 1 : -1;
+  if ($is_command < 0) {
+    $is_command = 0;
+    if (open($f, "<", $fn)) {  # Detect based on signature.
+      my $hd;
+      $is_command = 1 if ((sysread($f, $hd, 4) or 0) == 4) and $hd =~ m@\A(?:MZ|\x7fELF|#!)@;
+      close($f);
+    }
+  }
+  unshift @_, $fn;
+  goto &run_found_perl_script if !$is_command;
+  if (system(@_)) {
+    my $stmsg = sprintf("0x%x", $?);
+    die "$0: fatal: running command $fn: $stmsg\n";
+  }
+  0
+}
+
 # Can be called multiple times, result will be idempotent (on @INC etc.).
 # $_[0] is script filename (before autodetection), rest of @_ is @ARGV to pass.
 sub run_perl_script {
-  unshift @_, find_perl_script(shift(@_));
+  unshift @_, find_subcommand_or_perl_script(shift(@_));
   goto &run_found_perl_script;
+}
+
+# Can be called multiple times, result will be idempotent (on @INC etc.).
+# $_[0] is script filename (before autodetection), rest of @_ is @ARGV to pass.
+sub run_subcommand_or_perl_script {
+  unshift @_, find_subcommand_or_perl_script(shift(@_));
+  goto &run_found_subcommand_or_perl_script;
 }
 
 # Can be called multiple times, result will be idempotent (on @INC etc.).
 # $_[0] is script filename (before autodetection) or name of the directory
 # containing dosmcdir.pl, rest of @_ is @ARGV to pass.
-sub run_perl_script_or_dir {
-  my $script = find_perl_script(shift(@_), 1);
+sub run_subcommand_or_perl_script_or_dir {
+  my $script = find_subcommand_or_perl_script(shift(@_), 1);
   if (ref $script) {  # Found directory.
     $script = $$script;
     $script =~ s@/+.(?=/)@@g; $script =~ s@/+[.]\Z(?!\n)@@;
@@ -1264,13 +1301,13 @@ sub run_perl_script_or_dir {
   } else {
     unshift @_, $script;
   }
-  goto &run_found_perl_script;
+  goto &run_found_subcommand_or_perl_script;
 }
 
 # TODO(pts): Port this to Win32.
-if (@ARGV and $ARGV[0] !~ m@\A-@ and ($ARGV[0] =~ m@[.]p[lm]\Z(?!\n)@i or $ARGV[0] !~ m@[.][^./]+\Z(?!\n)@)) {
+if (@ARGV and $ARGV[0] !~ m@\A-@ and ($ARGV[0] =~ m@[.](?:p[lm]|sh|exe|elf)\Z(?!\n)@i or $ARGV[0] !~ m@[.][^./]+\Z(?!\n)@)) {
   fix_path();
-  run_perl_script_or_dir(@ARGV); exit;
+  run_subcommand_or_perl_script_or_dir(@ARGV); exit;
 }
 
 # --- Compiler frontend (calls compiler, assembler and (embedded) linker).
@@ -1333,7 +1370,7 @@ for my $arg (@ARGV) {
     # To disable this (arbitrary Perl script execution by directory name),
     # pass -q (or any other flag) as 1st arg.
     fix_path();
-    run_perl_script_or_dir(@ARGV); exit;
+    run_subcommand_or_perl_script_or_dir(@ARGV); exit;
   } elsif ($arg =~ m@[.](c|nasm|wasm|asm|obj|lib)\Z(?!\n)@) {
     push @sources, $arg;
   } else {

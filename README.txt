@@ -193,6 +193,12 @@ as `./dosmc MYCMD'. dosmc will sets $ENV{PATH}, @INC, @ARGV properly. If
 it's inconvenient to save to these directories, then save the Perl script
 anywhere, and specify the directory name in $ENV{DOSMCEXT}.
 
+You can also run some of the tools used by dosmc (such as nasm and wdis)
+directly as subcommands, e.g.  `./dosmc nasm ...'.  dosmc uses the same path
+lookup a for extension commands.  The actual filename may have an .exe or
+.cmd extension on Windows, and an .elf or .sh extension on non-Windows (e.g. 
+Linux or macOS).
+
 Notes about maximum memory usage of DOS programs:
 
 * 16-bit DOS programs can address up to 1 MiB memory (in real mode, using
