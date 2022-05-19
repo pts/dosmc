@@ -1820,7 +1820,8 @@ if ($is_bin) {
   build_static_library($EXEOUT, @objfns);
 } elsif ($PL eq "-cw") {
   # Output of wdis ($EXEOUT) can be fed to wasm again to produce an .obj file.
-  if (run_command("wdis", "-a", "-fi", "-i=\@", $objfns[0], " > $EXEOUT")) {
+  # Specify -fo=- to write to stdout.
+  if (run_command("wdis", "-a", "-fi", "-i=\@", $objfns[0], ($EXEOUT eq "-" ? () : (" > $EXEOUT")))) {
     print STDERR "$0: fatal: wdis failed\n"; exit(7);
   }
 }
