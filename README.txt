@@ -196,7 +196,7 @@ anywhere, and specify the directory name in $ENV{DOSMCEXT}.
 You can also run some of the tools used by dosmc (such as nasm and wdis)
 directly as subcommands, e.g.  `./dosmc nasm ...'.  dosmc uses the same path
 lookup a for extension commands.  The actual filename may have an .exe or
-.cmd extension on Windows, and an .elf or .sh extension on non-Windows (e.g. 
+.cmd extension on Windows, and an .elf or .sh extension on non-Windows (e.g.
 Linux or macOS).
 
 Notes about maximum memory usage of DOS programs:
@@ -249,5 +249,70 @@ Notes about maximum memory usage of DOS programs:
     malloc() can allocate 2039 in 1 MiB chunks).
     Minimum stripped (`owcc -s') executable size with
     malloc(), printf(), scanf() seems to be 51 KiB.
+
+Function calling convention (ABI):
+
+* dosmc uses the Watcom calling convention (__watcall, `wcc -ecw' default) for
+  the 16-bit small model (`wcc -ms'). More details below.
+* All the rules below were tested manually.
+* See also https://www.agner.org/optimize/calling_conventions.pdf .
+* It's possible to use a different calling convention in a per-function
+  basis, these are the predefined calling conventions in Watcom C:
+
+    void __cdecl    myfun_c(void);  /* wcc -ecc, symbol _myfun_c */
+    void __stdcall  myfun_d(void);  /* wcc -ecd, symbol _myfun_d */
+    void __fastcall myfun_f(void);  /* wcc -ecf, symbol @myfun_f */
+    void __pascal   myfun_p(void);  /* wcc -ecp, symbol MYFUN_P */
+    void __fortran  myfun_r(void);  /* wcc -ecr, symbol MYFUN_R  */
+    void __syscall  myfun_s(void);  /* wcc -ecs, symbol myfun_s */
+    void __watcall  myfun_w(void);  /* wcc -ecw, default, symbol myfun_w_ */
+
+* It's also possible to define custom calling conventions with a
+  `#pragma aux' declaration.
+* Only the following case is documented below: each function argument is
+  8-bit integer, 16-bit integer, 32-bit integer, 16-bit near pointer or
+  32-bit far pointer; function return value is 8-bit integer, 16-bit
+  integer, 32-bit integer or 16-bit near pointer, there are no varargs.
+* Return the return value (if not void) in AL for 8-bit result, AX for
+  16-bit result, and DX:AX for 32-bit result.  (For far pointers, DX is the
+  segment.  For integers, DX is the higher, more significant half.)
+* Rules for argument passing:
+  * If there are no arguments, don't pass any.
+  * Otherwise, if there is 1 argument, and it's 32-bit, then pass it in
+    DX:AX. (For far pointers, DX is the segment. For integers, DX is the
+    higher, more significant half.)
+  * Otherwise, if there is 1 argument, then pass it zero-extended in AX.
+  * Otherwise, if the first 2 arguments are 32-bit, then pass the 1st
+    argument in DX:AX, the 2nd argument in CX:BX, and push any remaining
+    arguments to the stack in reverse order (i.e. push the last argument
+    first; for 32-bit arguments, push higher half first; push 8-bit
+    arguments zero-extended to 16 bits).
+  * Otherwise, if the 1st argument is 32-bit, and the 2nd-argument is 8-bit
+    or 16-bit, and the 3rd argument is 32-bit, then pass the 1st argument in
+    DX:AX, the 2nd argument zero-extended in BX, and push any remaining
+    arguments to the stack in reverse order.
+  * Otherwise, if the 1st argument is 32-bit, and the 2nd-argument is 8-bit
+    or 16-bit, and the 3rd argument is 8-bit or 16-bit, then pass the 1st
+    argument in DX:AX, the 2nd argument zero-extended in BX, the 3rd
+    argument zero-extended in CX, and push any remaining arguments to the
+    stack in reverse order.
+  * Otherwise, if the 2nd argument is 32-bit, then pass the 1st argument
+    zero-extended in AX, the 2nd argument in CX:BX, and push any remaining
+    arguments to the stack in reverse order. (DX is not used for argument
+    passing.)
+  * Otherwise, pass the first 2, 3 or 4 arguments (as many as possible)
+    zero-extended in AX, then DX, then BX, then CX, and push any remaining
+    arguments to the stack in reverse order.
+* Upon return, the callee must remove (pop) arguments from the stack.
+  (For that, the `ret NN' instruction is practical, where NN is 2 times
+  the number of 16-bit words pushed to the stack.)
+* The callee must preserve registers CS, DS, SS, SI, DI, BP.
+* The callee must preserve registers BX, CX, DX, except those which were
+  used for argument passing.
+* The function may use registers AX, ES and the arithmetic FLAGS as scratch,
+  no need to preserve them (but AX or AL may be used as return value), and
+  for DF (direction flag) must be set to 0 (e.g.  instruction `cld') before
+  each function call (if changed by the caller before), and before
+  returning.
 
 __END__
