@@ -1401,7 +1401,7 @@ if ($PL eq "-cn" or $PL eq "-ce" or $PL eq "-cl") {
     $is_multiple_sources_ok = 1 if !length($EXEOUT);
     $PL = "-bt=bin" if !$is_multiple_sources_ok;  # For error message below.
   } else {
-    $EXEOUT = "$in1base.$EXT" if !length($EXEOUT) and $EXT ne "bin";
+    $EXEOUT = "$in1base.$EXT" if !length($EXEOUT);
     $is_multiple_sources_ok = 1;
   }
 } elsif ($PL eq "-cw") {
@@ -1416,6 +1416,7 @@ if ($PL eq "-cn" or $PL eq "-ce" or $PL eq "-cl") {
   }
 }
 die "$0: fatal: multiple source file arguments with $PL\n" if !$is_multiple_sources_ok and @sources > 1;
+die "$0: fatal: file is both source and output: $EXEOUT\n" if grep { $_ eq $EXEOUT } @sources;
 
 delete $ENV{WATCOM};
 delete $ENV{INCLUDE};
