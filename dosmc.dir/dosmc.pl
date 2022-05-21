@@ -1479,6 +1479,14 @@ sub run_command(@) {
 }
 
 # Detects assembly language, returns "wasm" or "nasm".
+#
+# To force "wasm" result, do any of the following:
+# * Start the file with `.TEXT' (etc.).
+# * Start the file with `WASM MACRO', then in next line: `ENDM'.
+#
+# To force "nasm" result, do any of the following:
+# * Start the file with `%undef aaa'.
+# * Start the file with `%define NASM'.
 sub detect_asm($) {
   my $asmfn = $_[0];
   my $f;
@@ -1489,6 +1497,13 @@ sub detect_asm($) {
     s@\A\s+@@;
     if (m@\A(?:;|GLOBAL\s+|PUBLIC\s+)@i) {  # Available in both "wasm" and "nasm".
     } elsif (m@\A([.]|EXTRN\s+|\w+\s+(?:GROUP|SEGMENT|MACRO|=)\s+)@i) {
+      # wasm directives starting with .: .186 .286C .286P .287 .386P .387
+      # .486P .586P .686P .8086 .8087 .ALPHA .BREAK .CODE .CONST .CONTINUE
+      # .CREF .DATA? .DOSSEG .ELSE .ENDIF .ENDW .ERRB .ERRDEF .ERRDIFI
+      # .ERRE .ERRIDNI .ERRNB .ERRNDEF .ERRNZ .EXIT .FARDATA? .IF .K3D
+      # .LFCOND .LIST .LISTALL .LISTIF .MMX .MODEL .NO87 .NOCREF .NOLIST
+      # .RADIX .REPEAT .SALL .SEQ .SFCOND .STACK .STARTUP .TFCOND .UNTIL
+      # .WHILE .XCREF .XLIST .XMM2 .XMM3
       close($f); return "wasm";
     } elsif (m@\A(%|ORG\s+|BITS\s+|CPU\s+|EXTERN\s+|GROUP\s+|SEGMENT\s+|SECTION\s+TIMES\s+|__LINKER_FLAG\()@i) {
       close($f); return "nasm";
@@ -1497,8 +1512,6 @@ sub detect_asm($) {
     }
   }
   close($f);
-  # To force "wasm", start the file with `WASM MACRO', then in next line: `ENDM'.
-  # To force "nasm", start the file with `%define NASM'.
   die "$0: fatal: cannot detect .asm file syntax: $asmfn\n";
 }
 
