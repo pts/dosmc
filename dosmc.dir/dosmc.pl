@@ -1495,7 +1495,7 @@ sub detect_asm($) {
   local $_;
   while (<$f>) {
     s@\A\s+@@;
-    if (m@\A(?:;|GLOBAL\s+|PUBLIC\s+)@i) {  # Available in both "wasm" and "nasm".
+    if (m@\A(?:;|GLOBAL\s+|PUBLIC\s+|ORG\s+)@i) {  # Available in both "wasm" and "nasm".
     } elsif (m@\A([.]|EXTRN\s+|\w+\s+(?:GROUP|SEGMENT|MACRO|=)\s+)@i) {
       # wasm directives starting with .: .186 .286C .286P .287 .386P .387
       # .486P .586P .686P .8086 .8087 .ALPHA .BREAK .CODE .CONST .CONTINUE
@@ -1505,7 +1505,7 @@ sub detect_asm($) {
       # .RADIX .REPEAT .SALL .SEQ .SFCOND .STACK .STARTUP .TFCOND .UNTIL
       # .WHILE .XCREF .XLIST .XMM2 .XMM3
       close($f); return "wasm";
-    } elsif (m@\A(%|ORG\s+|BITS\s+|CPU\s+|EXTERN\s+|GROUP\s+|SEGMENT\s+|SECTION\s+TIMES\s+|__LINKER_FLAG\()@i) {
+    } elsif (m@\A(%|BITS\s+|CPU\s+|EXTERN\s+|GROUP\s+|SEGMENT\s+|SECTION\s+TIMES\s+|__LINKER_FLAG\()@i) {
       close($f); return "nasm";
     } elsif (y@\r\n@@c) {
       last  # Unable to parse first line.
