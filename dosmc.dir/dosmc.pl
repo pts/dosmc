@@ -1792,6 +1792,7 @@ my @objfns;
 my @objbasefns;
 my $do_create_obj_or_bin = ($PL eq "-cw" or $PL eq "-ce" or $PL eq "-cn" or $PL eq "-cl" or $PL eq "-c");
 my $forced_objfn = (($PL ne "-cw" and $PL ne "-ce" and $PL ne "-cn" and $PL ne "-cl") and length($EXEOUT)) ? $EXEOUT : undef;
+my $errc = 0;
 for my $srcfn (@sources) {
   my $objbasefn = $srcfn;
   my $ext = $objbasefn =~ s@[.]([^./]+)\Z(?!\n)@@s ? lc($1) : "";  # TODO(pts): Port to Win32.
@@ -1825,7 +1826,7 @@ for my $srcfn (@sources) {
       push @nasm_cmd, "-o", $objfn, $tmpfn;
     }
     if (run_command(@nasm_cmd)) {
-      print STDERR "$0: fatal: nasm failed\n"; exit(3);
+      print STDERR "$0: error: nasm failed\n"; ++$errc;
     }
     splice @nasm_cmd, $nasm_cmd_size;
   } elsif ($ext eq "wasm") {
@@ -1840,7 +1841,7 @@ for my $srcfn (@sources) {
     die "$0: fatal: -bt=bin with .wasm source not supported: $srcfn\n" if $is_bin;
     push @wasm_cmd, $srcfn;
     if (run_command(@wasm_cmd)) {
-      print STDERR "$0: fatal: wasm failed\n"; exit(2);
+      print STDERR "$0: error: wasm failed\n"; ++$errc;
     }
     splice @wasm_cmd, $wasm_cmd_size;
   } else {
@@ -1853,10 +1854,14 @@ for my $srcfn (@sources) {
     push @wcc_cmd, $srcfn;
     $wcc_cmd[-1] =~ y@/@\\@ if $is_win32;  # !! Do it more.
     if (run_command(@wcc_cmd)) {
-      print STDERR "$0: fatal: wcc failed\n"; exit(2);
+      print STDERR "$0: error: wcc failed\n"; ++$errc;
     }
     splice @wcc_cmd, $wcc_cmd_size;
   }
+}
+if ($errc) {
+  print STDERR "$0: fatal: $errc compilation failure@{['s'x($errc!=1)]}, aborting\n";
+  exit(3);
 }
 
 if ($is_bin) {  # nasm has already finished.
