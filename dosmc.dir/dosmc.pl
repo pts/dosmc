@@ -337,17 +337,18 @@ sub load_obj($$;$) {
     my $segment_name = $segment_names[$segment_idx];
     die "$0: fatal: LEDATA not allowed in segment $segment_name\n" if
         $segment_name eq "_BSS" or $segment_name eq "STACK";
-    my $expected_ofs = length($ledata{$segment_name});
-    #print STDERR "info: LEDATA: $segment_name expected_ofs=$expected_ofs ofs=$ofs size=$size\n";
-    if ($expected_ofs == 0 and $segment_name eq "_TEXT" and ref($text_vofs_ref) and !defined($$text_vofs_ref)) {
+    $last_ofs = length($ledata{$segment_name});
+    #print STDERR "info: LEDATA: $segment_name last_ledata_ofs=$last_ofs ofs=$ofs size=$size\n";
+    if ($last_ofs == 0 and $segment_name eq "_TEXT" and ref($text_vofs_ref) and !defined($$text_vofs_ref)) {
       $$text_vofs_ref = $text_vofs = $ofs;  # In .wasm for -bt=bin: `.code', then `org ...'.
+      $last_ofs = 0;
     } else {
       $ofs -= $text_vofs if $segment_name eq "_TEXT";
       my $size = length($data);
-      die "$0: fatal: gap in LEDATA for $segment_name: expected_ofs=$expected_ofs ofs=$ofs size=$size\n" if $expected_ofs  != $ofs;
+      die "$0: fatal: gap in LEDATA for $segment_name: last_ledata_ofs=$last_ofs ofs=$ofs size=$size\n" if $last_ofs  != $ofs;
     }
     $ledata{$segment_name} .= $data;
-    $last_segment_name = $segment_name;  $last_ofs = $ofs;  # For FIXUPP.
+    $last_segment_name = $segment_name;  # For FIXUPP, also $last_ofs.
   };
   while (1) {  # Read next .obj record.
     my $data;
@@ -469,16 +470,10 @@ sub load_obj($$;$) {
         die "$0: fatal: target thread not supported\n" if $fd & 8;
         my $is_self = ~($a >> 6) & 1;
         my $ltype = ($a >> 2) & 15;  # 1: offset; 2. base segment.
-        my $lsize = ($ltype == 1 or $ltype == 2) ? 2 : undef;
-        die "$0: fatal: unsupported FIXUPP location type: $ltype\n" if !defined($lsize);
+        my $lsize = ($ltype == 1 or $ltype == 2) ? 2 : ($ltype == 3) ? 4 : undef;
         my $ltypem = $is_self ? -$ltype : $ltype;
         $ofs = $last_ofs + ($ofs | ($a & 3) << 8);
-        my $endofs = $ofs + $lsize;
-        if ($text_vofs and $last_segment_name eq "_TEXT") {
-          $ofs -= $text_vofs;
-          $endofs -= $text_vofs;
-          die "$0: fatal: FIXUPP data record offset negative in segment $last_segment_name: $ofs\n" if $ofs < 0;
-        }
+        my $endofs = $ofs + ($lsize or 1);
         my $size_limit = length($ledata{$last_segment_name});
         die "$0: fatal: FIXUPP data record offset too large in segment $last_segment_name: got=$endofs max=$size_limit\n" if
             $endofs > $size_limit;
@@ -487,7 +482,7 @@ sub load_obj($$;$) {
         my $fixuppr = $fixupp{$last_segment_name};
         die "$0: fatal: FIXUPP must not overlap\n" if @$fixuppr and $fixuppr->[-1][0] > $ofs;
         my $symbol;
-        #print STDERR "info: FIXUPP ltype=$ltype frame=$frame target=$target\n";
+        die "$0: fatal: unsupported FIXUPP location type: ltype=$ltype\n" if !defined($lsize);
         if (($ltype == 1 and $frame == 5 and $target == 6) or
             ($ltype == 2 and $frame == 5 and ($target == 4 or $target == 5))) {
           die "$0: fatal: EOF in FIXUPP target\n" if $i >= $size;
@@ -523,7 +518,7 @@ sub load_obj($$;$) {
               $frame == 0 and $segment_idx != vec($data, $i++, 8);  # Skip duplicate segment index.
           die "$0: fatal: unknown segment: $segment_idx\n" if !$segment_idx or $segment_idx >= @segment_names;
           my $segment_name = $segment_names[$segment_idx];
-          #print STDERR "info: FIXUPP 16-bit $is_self \@$ofs SEGMENT $segment_name\n";
+          #print STDERR "info: FIXUPP 16-bit is_self=$is_self \@$ofs SEGMENT $segment_name\n";
           $symbol = "OS\$${segment_name}";
           die "$0: fatal: stack FIXUPP outside segment _TEXT\n" if
               $segment_name eq "STACK" and $last_segment_name ne "_TEXT";
@@ -535,8 +530,10 @@ sub load_obj($$;$) {
         } else {
           die "$0: fatal: unsupported FIXUPP: ltype=$ltype frame=$frame target=$target\n";
         }
-        #print STDERR "info: add FIXUPP: segment=$last_segment_name endofs=$endofs ofs=$ofs ltypem=$ltypem symbol=$symbol\n";
-        push @$fixuppr, [$endofs, $ofs, $ltypem, $symbol];
+        if (!(ref($text_vofs_ref) and $symbol eq "OS\$_TEXT" and ($ltypem == 1 or $ltypem == 5 or $ltypem == 9))) {
+          #print STDERR "info: add FIXUPP: segment=$last_segment_name endofs=$endofs ofs=$ofs ltypem=$ltypem symbol=$symbol\n";
+          push @$fixuppr, [$endofs, $ofs, $ltypem, $symbol];
+        }
       }
     } elsif ($type == 0x9d) {  # Long FIXUPP.
       die "$0: fatal: long FIXUPP not supported\n";
@@ -600,15 +597,15 @@ sub load_obj($$;$) {
   for my $segment_name (@SEGMENT_ORDER) {
     # Typically $segment_sizes{_BSS} is missing, put it back.
     $segment_sizes{$segment_name} = 0 if !exists($segment_sizes{$segment_name});
-    my $size = ($segment_name eq "_BSS" or $segment_name eq "STACK") ? 0 : $segment_sizes{$segment_name};
     my $data_size = length($ledata{$segment_name});
-    die "$0: assert: segment size mismatch for $segment_name: data_size=$data_size size=$size\n" if
-        $data_size != $size;
-    if ($text_vofs) {
-      for my $fixup (@{$fixupp{$segment_name}}) {
-        my($endofs, $ofs, $ltypem, $symbol) = @$fixup;
-        substr($ledata{$segment_name}, $ofs, 2) = pack("v", unpack("v", substr($ledata{$segment_name}, $ofs, 2)) - $text_vofs) if $symbol eq "OS\$_TEXT";
-      }
+    if ($segment_name eq "_BSS" or $segment_name eq "STACK") {
+      die "$0: assert: segment size must be 0 for $segment_name: data_size=$data_size\n" if
+          $data_size != 0;
+    } else {
+      my $size = $segment_sizes{$segment_name};
+      die "$0: assert: segment size mismatch for $segment_name: data_size=$data_size size=$size\n" if
+          ($data_size & 0xffff) != $size;
+      $segment_sizes{$segment_name} = $data_size;
     }
   }
   my %undefined_symbols = map { $_ => 1 } @extdef;
@@ -937,7 +934,7 @@ sub link_executable($$$$@) {
       for my $fixup (@$fixupr) {
         my($endofs, $ofs, $ltypem, $symbol) = @$fixup;
         substr($$datar, $ofs, 2) = "\0\0" if $symbol eq "S\$STACK" and $ltypem == 1;  # Always 1, it's offset. Set displacement to 0.
-        die "$0: fatal: general segment-base fixup unsupoorted: $1\n" if $symbol =~ m@\ASB\$(.*)@s;
+        die "$0: fatal: general segment-base fixup unsupported: $1\n" if $symbol =~ m@\ASB\$(.*)@s;
       }
     }
   }
@@ -1176,14 +1173,17 @@ call__fullprog_end:  ; Make fullprog_code without fullprog_end fail.
     my $vofs_base = ($is_exe ? 8 : $is_com ? 0x100 : $text_vofs_for_bin) + length($init_regs) + length($clear_bss);
     my $after_text_vofs = $vofs_base + length($call_main) + length($ledata{_TEXT});
     my $data_size = $segment_sizes{CONST} + $segment_sizes{CONST2} + $segment_sizes{_DATA};
-    die "$0: fatal: data too large\n" if $data_size + $segment_sizes{_BSS} + $ubss_size > 65535;  # !! Allow 65536, also in nasm.
-    die "$0: fatal: code too large\n" if $after_text_vofs > 65535;  # !! Allow 65536, also in nasm.
-    die "$0: fatal: code+data too large for .com\n" if !$is_exe and $after_text_vofs + $data_size + $segment_sizes{_BSS} > 65535;
-    my $stack_align_size = ($after_text_vofs + $data_size + $segment_sizes{_BSS}) & 1;
-    my $stack_size_auto = 65534 - ($data_size + $segment_sizes{_BSS} + ($is_exe ? 0 : 2 + $after_text_vofs) + $stack_align_size);
-    die "$0: assert: bad stack_size_auto\n"  if $is_exe and $data_size + $segment_sizes{_BSS} + $stack_align_size + $stack_size_auto != 65534;
-    my $stack_size = ($segment_sizes{STACK} or $stack_size_auto);  # If STACK segment specified, use its size, otherwise fill stack to make DGROUP ~64 KiB long.
-    die "$0: fatal: stack too small (code and data too large)\n" if $stack_size < 10;
+    my $stack_size = 0; my $stack_align_size = 0;
+    if ($is_com or $is_exe) {
+      die "$0: fatal: data too large\n" if $data_size + $segment_sizes{_BSS} + $ubss_size > 65535;  # !! Allow 65536, also in nasm.
+      die "$0: fatal: code too large\n" if $after_text_vofs > 65535;  # !! Allow 65536, also in nasm.
+      die "$0: fatal: code+data too large for .com\n" if !$is_exe and $after_text_vofs + $data_size + $segment_sizes{_BSS} > 65535;
+      $stack_align_size = ($after_text_vofs + $data_size + $segment_sizes{_BSS}) & 1;
+      my $stack_size_auto = 65534 - ($data_size + $segment_sizes{_BSS} + ($is_exe ? 0 : 2 + $after_text_vofs) + $stack_align_size);
+      die "$0: assert: bad stack_size_auto\n"  if $is_exe and $data_size + $segment_sizes{_BSS} + $stack_align_size + $stack_size_auto != 65534;
+      $stack_size = ($segment_sizes{STACK} or $stack_size_auto);  # If STACK segment specified, use its size, otherwise fill stack to make DGROUP ~64 KiB long.
+      die "$0: fatal: stack too small (code and data too large)\n" if $stack_size < 10;
+    }
     my %segment_vofs;
     my $vofs = $vofs_base;
     $segment_vofs{call_main} = $vofs; $vofs += length($call_main);  # For the relocation below.
