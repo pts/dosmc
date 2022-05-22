@@ -1,0 +1,17 @@
+;
+; com0o2.wasm: minimalistic .wasm source for dosmc .com program
+; by pts@fazekas.hu at Sun May 22 19:35:06 CEST 2022
+;
+; Compile with: dosmc -mt examples/com0o2.wasm
+;
+; To get a slightly larger .exe program, drop the -mt above.
+;
+
+extrn __linker_flag_omit_cld:byte
+extrn __linker_flag_uninitialized_bss:byte
+extrn __linker_flag_start_es_psp:byte
+.code
+_start:
+; Insert more code here if needed.
+ret
+end _start

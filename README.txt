@@ -21,7 +21,7 @@ Usage:
 
   $ ./dosmc -mt examples/prog.c  # Creates examples/prog.com .
 
-To try it, run `dosbox examples' (without the quotes), and within the DOSBox
+!! To try it, run `dosbox examples' (without the quotes), and within the DOSBox
 window, run prog.exe or prog.com . The expected output is `ZYfghiHello!'
 (without the quotes).
 
@@ -103,11 +103,15 @@ Source file formats:
   because of the versatily and the clean syntax. dosmc also provides
   some convenience macros (e.g. __LINKER_FLAG) and defaults, see how compact
   examples/helloc.nasm is. (Also compare examples/helloc2.nasm
-  o examples/helloc2w.wasm for compactness.) It's also possible to write
+  to examples/helloc2w.wasm for compactness.) It's also possible to write
   your program in assembly only (no .c code), and use dosmc to compile it
-  to .com or .exe, see examples/helloc.nasm for an example.
+  to .com or .exe, see examples/com0o1.nasm and examples/helloc.nasm for
+  examples.
 * If the extension is .wasm, then the bundled WASM (OpenWatcom assembler) is
   used to create the .obj file. Convenience macros are not provided.
+  It's also possible to write your program in assembly only (no .c code),
+  and use dosmc to compile it to .com or .exe, see examples/com0o2.wasm for
+  an example.
 * If the extension is .asm, then dosmc looks at the first directive in
   the file and autodetects it as .nasm or .wasm.
 * If the extension is .obj, then the file is used as is for linking. The
