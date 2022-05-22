@@ -308,8 +308,8 @@ sub emit_nasm_segment($$$$$$) {
 # .obj and .lib files not created by (wcc, nasm or wasm) invoked by dosmc. However,
 # .obj output of other assemblers may work, see examples/helloc2*.asm for examples.
 # Based on: https://pierrelib.pagesperso-orange.fr/exec_formats/OMF_v1.1.pdf
-sub load_obj($$) {
-  my($objfn, $objli) = @_;
+sub load_obj($$;$) {
+  my($objfn, $objli, $text_vofs_ref) = @_;
   my @objs;  # Result. ([\%undefined_symbols, \%segment_symbols, \%ledata, \%segment_sizes, \%fixupp, $has_string_instructions], ...).
   my $f;  # Of OMF .obj format, typically created by wcc or `nasm -f obj'.
   my $had_lheadr = 0;
@@ -330,6 +330,25 @@ sub load_obj($$) {
   my %fixupp = map { $_ => [] } @SEGMENT_ORDER;  # $segment_name => [[$endofs, $ofs, $ltypem, $symbol], ...].
   my $has_string_instructions = 0;
   my($last_segment_name, $last_ofs);
+  my $text_vofs = 0;
+  my $add_ledata_sub = sub {
+    my($segment_idx, $ofs, $data) = @_;
+    die "$0: fatal: unknown segment: $segment_idx\n" if !$segment_idx or $segment_idx >= @segment_names;
+    my $segment_name = $segment_names[$segment_idx];
+    die "$0: fatal: LEDATA not allowed in segment $segment_name\n" if
+        $segment_name eq "_BSS" or $segment_name eq "STACK";
+    my $expected_ofs = length($ledata{$segment_name});
+    #print STDERR "info: LEDATA: $segment_name expected_ofs=$expected_ofs ofs=$ofs size=$size\n";
+    if ($expected_ofs == 0 and $segment_name eq "_TEXT" and ref($text_vofs_ref) and !defined($$text_vofs_ref)) {
+      $$text_vofs_ref = $text_vofs = $ofs;  # In .wasm for -bt=bin: `.code', then `org ...'.
+    } else {
+      $ofs -= $text_vofs if $segment_name eq "_TEXT";
+      my $size = length($data);
+      die "$0: fatal: gap in LEDATA for $segment_name: expected_ofs=$expected_ofs ofs=$ofs size=$size\n" if $expected_ofs  != $ofs;
+    }
+    $ledata{$segment_name} .= $data;
+    $last_segment_name = $segment_name;  $last_ofs = $ofs;  # For FIXUPP.
+  };
   while (1) {  # Read next .obj record.
     my $data;
     if ((read($f, $data, 3) or 0) != 3) {
@@ -378,15 +397,8 @@ sub load_obj($$) {
     } elsif ($type == 0xa0) {  # LEDATA.
       die "$0: fatal: LEDATA too short" if $size < 3;
       my($segment_idx, $ofs) = unpack("Cv", substr($data, 0, 3));
-      die "$0: fatal: unknown segment: $segment_idx\n" if !$segment_idx or $segment_idx >= @segment_names;
-      my $segment_name = $segment_names[$segment_idx];
-      die "$0: fatal: LEDATA not allowed in segment $segment_name\n" if
-          $segment_name eq "_BSS" or $segment_name eq "STACK";
       $size -= 3; substr($data, 0, 3) = "";
-      #print STDERR "info: LEDATA: $segment_name ofs=$ofs size=$size\n";
-      die "$0: fatal: gap in LEDATA for $segment_name\n" if length($ledata{$segment_name}) != $ofs;
-      $ledata{$segment_name} .= $data;
-      $last_segment_name = $segment_name;  $last_ofs = $ofs;  # For FIXUPP.
+      $add_ledata_sub->($segment_idx, $ofs, $data);
     } elsif ($type == 0xa1) {  # Long LEDATA.
       die "$0: fatal: long LEDATA not supported\n";
     } elsif ($type == 0x90 or $type == 0xb6) {  # PUBDEF or LPUBDEF(static).
@@ -459,8 +471,14 @@ sub load_obj($$) {
         my $ltypem = $is_self ? -$ltype : $ltype;
         $ofs = $last_ofs + ($ofs | ($a & 3) << 8);
         my $endofs = $ofs + $lsize;
-        die "$0: fatal: FIXUPP data record offset too large\n" if
-            $endofs > length($ledata{$last_segment_name});
+        if ($text_vofs and $last_segment_name eq "_TEXT") {
+          $ofs -= $text_vofs;
+          $endofs -= $text_vofs;
+          die "$0: fatal: FIXUPP data record offset negative in segment $last_segment_name: $ofs\n" if $ofs < 0;
+        }
+        my $size_limit = length($ledata{$last_segment_name});
+        die "$0: fatal: FIXUPP data record offset too large in segment $last_segment_name: got=$endofs max=$size_limit\n" if
+            $endofs > $size_limit;
         my $frame = ($fd >> 4) & 7;
         my $target = $fd & 7;
         my $fixuppr = $fixupp{$last_segment_name};
@@ -484,7 +502,7 @@ sub load_obj($$) {
             # S$CONST is the byte offset of CONST within DGROUP.
             $symbol = "SB\$$segment_names[$idx]";
           } elsif ($target == 5) {
-            $symbol = "SB\$$SEGMENT_ORDER[1]";  # First segment in DGROUP, right after _TEXT.
+            $symbol = "SB\$$SEGMENT_ORDER[1]";  # First segment in DGROUP, right after _TEXT.  # TODO(pts): Why ignore $idx?
           } else {
             die "$0: fatal: unknown FIXUPP $itype index: $idx\n" if $idx >= @extdef;
             $symbol = $extdef[$idx];
@@ -514,6 +532,7 @@ sub load_obj($$) {
         } else {
           die "$0: fatal: unsupported FIXUPP: ltype=$ltype frame=$frame target=$target\n";
         }
+        #print STDERR "info: add FIXUPP: segment=$last_segment_name endofs=$endofs ofs=$ofs ltypem=$ltypem symbol=$symbol\n";
         push @$fixuppr, [$endofs, $ofs, $ltypem, $symbol];
       }
     } elsif ($type == 0x9d) {  # Long FIXUPP.
@@ -574,12 +593,20 @@ sub load_obj($$) {
   } else {
     $has_string_instructions = 1 if length($code_type);
   }
+  $segment_sizes{_TEXT} -= $text_vofs if defined($segment_sizes{_TEXT});
   for my $segment_name (@SEGMENT_ORDER) {
     # Typically $segment_sizes{_BSS} is missing, put it back.
     $segment_sizes{$segment_name} = 0 if !exists($segment_sizes{$segment_name});
     my $size = ($segment_name eq "_BSS" or $segment_name eq "STACK") ? 0 : $segment_sizes{$segment_name};
-    die "$0: assert: segment size mismatch for $segment_name\n" if
-        length($ledata{$segment_name}) != $size;
+    my $data_size = length($ledata{$segment_name});
+    die "$0: assert: segment size mismatch for $segment_name: data_size=$data_size size=$size\n" if
+        $data_size != $size;
+    if ($text_vofs) {
+      for my $fixup (@{$fixupp{$segment_name}}) {
+        my($endofs, $ofs, $ltypem, $symbol) = @$fixup;
+        substr($ledata{$segment_name}, $ofs, 2) = pack("v", unpack("v", substr($ledata{$segment_name}, $ofs, 2)) - $text_vofs) if $symbol eq "OS\$_TEXT";
+      }
+    }
   }
   my %undefined_symbols = map { $_ => 1 } @extdef;
   delete $undefined_symbols{$extdef[0]};
@@ -701,8 +728,9 @@ shr ax, 1  ; Set ax to argc, it's final return value.
 sub link_executable($$$$@) {
   my($is_nasm, $exefn, $target, $CPUF) = splice(@_, 0, 4);  # Keep .obj files in @_.
   local $0 = "dosmc-linker-$target" . ($is_nasm ? "-nasm" : "");
-  die "$0: assert: unknown target: $target\n" if $target ne "exe" and $target ne "com";
+  die "$0: assert: unknown target: $target\n" if $target ne "exe" and $target ne "com" and $target ne "bin";
   my $is_exe = $target eq "exe";
+  my $is_com = $target eq "com";
   my %undefined_symbols;
   my %symbol_ofs;   # $symbol => $ofs. Offset is within its section.
   my %text_symbol_ofs;   # $symbol => $ofs. Offset is within section _TEXT.
@@ -719,6 +747,8 @@ sub link_executable($$$$@) {
   my %unknown_lf;
   my $obji_base = -1;
   my %duplicate_symbols;
+  my $text_vofs_for_bin;
+  my $text_vofs_ref = ($is_com or $is_exe) ? undef : \$text_vofs_for_bin;
   #print STDERR "info: first round\n";
   while (@_) {  # Next round.
     my @skipped_objs;
@@ -730,7 +760,7 @@ sub link_executable($$$$@) {
       if ($obji == @objs) {
         last if $objfni == @_;
         my $load_obj_count = @objs;
-        push @objs, load_obj($_[$objfni++], $objli), undef;
+        push @objs, load_obj($_[$objfni++], $objli, $text_vofs_ref), undef;
         $load_obj_count = @objs - $load_obj_count;
         $objli += $load_obj_count;
         #print STDERR "info: loaded @{[$load_obj_count-1]} objs from $_[$objfni-1]\n";
@@ -843,14 +873,16 @@ sub link_executable($$$$@) {
     die "$0: fatal: duplicate symbols: @lu\n";
   }
 
-  my $entry_count = (defined($text_symbol_ofs{"G\$main_"}) + defined($text_symbol_ofs{"G\$_start_"}));
-  die "$0: fatal: too many entry points (main functions)\n" if $entry_count > 1;
-  die "$0: fatal: missing entry point (main function)\n" if $entry_count == 0;
+  if ($is_com or $is_exe) {
+    my $entry_count = (defined($text_symbol_ofs{"G\$main_"}) + defined($text_symbol_ofs{"G\$_start_"}));
+    die "$0: fatal: too many entry points (main functions)\n" if $entry_count > 1;
+    die "$0: fatal: missing entry point (main function)\n" if $entry_count == 0;
+  }
 
   die "$0: fatal: conflicting linker flags: force_argc_zero, uninitialized_argc\n" if
       $lf{force_argc_zero} and $lf{uninitialized_argc};
 
-  my $exit_code = get_8086_exit_code($ledata{_TEXT}, \%text_symbol_ofs);
+  my $exit_code = ($is_com or $is_exe) ? get_8086_exit_code($ledata{_TEXT}, \%text_symbol_ofs) : undef;
   if (defined($exit_code)) {  # Shortcut if the program immediately exits.
     for my $segment_name (@SEGMENT_ORDER) {
       $ledata{$segment_name} = ""; $segment_sizes{$segment_name} = 0; $fixupp{$segment_name} = []; $segment_symbols{$segment_name} = [];
@@ -907,18 +939,20 @@ sub link_executable($$$$@) {
     }
   }
 
+  my $entry_point_mode = !($is_com or $is_exe) ? 4 : defined($text_symbol_ofs{"G\$_start_"}) ? 1 : (defined($text_symbol_ofs{"G\$main_"}) and $do_use_argc) ? 2 : defined($text_symbol_ofs{"G\$main_"}) ? 3 : 0;
+  die "$0: assert: bad entry_point_mode\n" if !$entry_point_mode;  # We've checked $entry_count above already.
+
   my $does_entry_point_return = !defined($exit_code);  # TODO(pts): Smarter detection.
   my $is_data_used = !defined($exit_code);
-  my $entry_point_mode = defined($text_symbol_ofs{"G\$_start_"}) ? 1 : (defined($text_symbol_ofs{"G\$main_"}) and $do_use_argc) ? 2 : defined($text_symbol_ofs{"G\$main_"}) ? 3 : 0;
   my $need_clear_ax = ($entry_point_mode == 2 and !$lf{uninitialized_argc} and $lf{force_argc_zero}) ? 1 : 0;
   my $do_clear_bss_with_code = (!$lf{uninitialized_bss} and $segment_sizes{_BSS} + ($need_clear_ax << 1) > 14);  # 14 == length($clear_bss_full).
-  die "$0: assert: bad entry_point_mode\n" if !$entry_point_mode;  # We've checked $entry_count above already.
   my $need_clear_df = ($do_clear_bss_with_code or $entry_point_mode == 2 or (!$lf{omit_cld} and $has_string_instructions and !(
       defined($text_symbol_ofs{"G\$_start_"}) and substr($ledata{_TEXT}, $text_symbol_ofs{"G\$_start_"}, 1) =~ m@\A[\xFC\xFD]@  # cld or std.
       )));
+  $does_entry_point_return = $is_data_used = $need_clear_ax = $do_clear_bss_with_code = $need_clear_df = 0 if $entry_point_mode == 4;
 
   # _DATA comes before _BSS in @SEGMENT_ORDER, move all (\0) bytes from _BSS to _DATA.
-  if (!$lf{uninitialized_bss} and !$do_clear_bss_with_code) { $ledata{_DATA} .= "\0" x $segment_sizes{_BSS}; $segment_sizes{_DATA} += $segment_sizes{_BSS}; $segment_sizes{_BSS} = 0; }
+  if (!$lf{uninitialized_bss} and !$do_clear_bss_with_code and $entry_point_mode != 4) { $ledata{_DATA} .= "\0" x $segment_sizes{_BSS}; $segment_sizes{_DATA} += $segment_sizes{_BSS}; $segment_sizes{_BSS} = 0; }
   for my $segment_name (@SEGMENT_ORDER) {
     my $size = ($segment_name eq "_BSS" or $segment_name eq "STACK") ? 0 : $segment_sizes{$segment_name};
     die "$0: assert: output segment size mismatch for $segment_name\n" if length($ledata{$segment_name}) != $size;
@@ -980,18 +1014,23 @@ bss_end:
 ; Fails with `error: TIMES value -... is negative` if data is too large (>~64 KiB).
 times -(((bss_end-bss_start)+(data_end-data_start))>>16) db 0
 );
-    } else {  # .com
+    } else {  # .com or .bin
       my $stack_size_expr = ($segment_sizes{STACK} or "65535-3-((auto_stack_aligned-bss_start)+(data_end-data_start)+((code_end-code_start+0x100)&15))");
+      my $text_vofs = $is_com ? 0x100 : $text_vofs_for_bin;
 # Based on https://github.com/pts/pts-nasm-fullprog/blob/master/fullprog_dosexe.inc.nasm
-$fullprog_code = q(
-section .text align=1 vstart=0x100  ; org 0x100
+$fullprog_code = qq(
+section .text align=1 vstart=$text_vofs  ; org 0x100
 code_start:
 );
-$fullprog_data = q(
+$fullprog_data = $is_com ? q(
 code_end:
 ; Fails with `error: TIMES value -... is negative` if code is too large (>~64 KiB).
 times -((code_end-code_start+0x100)>>16) db 0
 section .data align=1 vstart=0x100+(code_end-code_start)  ; vfollows=.text is off by 2 bytes.
+data_start:
+) : qq(
+code_end:
+section .data align=1 vstart=$text_vofs+(code_end-code_start)  ; vfollows=.text is off by 2 bytes.
 data_start:
 );
 $fullprog_bss = q(
@@ -999,7 +1038,7 @@ data_end:
 section .bss align=1  ; vstart=0
 bss_start:
 );
-$fullprog_end = qq(
+$fullprog_end = $is_com ? qq(
 auto_stack:  ; Autodetect stack size to fill main segment to almost 65535 bytes.
 resb ((auto_stack-bss_start)+(data_end-data_start)+(code_end-code_start+0x100))&1  ; Word-align stack, for speed.
 auto_stack_aligned:
@@ -1014,6 +1053,13 @@ call__fullprog_end:  ; Make fullprog_code without fullprog_end fail.
 ; +3 because some DOS systems set sp to 0xfffc instead of 0xffff
 ; (http://www.fysnet.net/yourhelp.htm).
 times -(((bss_end-bss_start)+(data_end-data_start)+(code_end-code_start+0x100)+3)>>16) db 0
+) : qq(
+auto_stack:  ; Autodetect stack size to fill main segment to almost 65535 bytes.
+auto_stack_aligned:
+stack:
+S\$STACK:
+bss_end:
+call__fullprog_end:  ; Make fullprog_code without fullprog_end fail.
 );
     }
     my $nasm_cpu = $CPUF eq "-0" ? "8086" : substr($CPUF, 1) . "86";
@@ -1121,8 +1167,10 @@ times -(((bss_end-bss_start)+(data_end-data_start)+(code_end-code_start+0x100)+3
       # call G$main_;; mov ah, 0x4c;; int 0x21  ; EXIT, exit code in al
       $call_main = "\xE8\x00\x00\xB4\x4C\xCD\x21";
       $call_main_symbol = "G\$main_"; $call_main_ofs = length($call_main) - 6;
+    } else {
+      $call_main = "";
     }
-    my $vofs_base = ($is_exe ? 8 : 0x100) + length($init_regs) + length($clear_bss);
+    my $vofs_base = ($is_exe ? 8 : $is_com ? 0x100 : $text_vofs_for_bin) + length($init_regs) + length($clear_bss);
     my $after_text_vofs = $vofs_base + length($call_main) + length($ledata{_TEXT});
     my $data_size = $segment_sizes{CONST} + $segment_sizes{CONST2} + $segment_sizes{_DATA};
     die "$0: fatal: data too large\n" if $data_size + $segment_sizes{_BSS} + $ubss_size > 65535;  # !! Allow 65536, also in nasm.
@@ -1328,10 +1376,10 @@ if (@ARGV and $ARGV[0] eq "//link") {
       die "$0: fatal: unsupported argument: $arg\n";
     } elsif ($arg eq "-ce" or $arg eq "-cn") {
     } elsif ($arg eq "-q" or $arg eq "-nq") {
-    } elsif ($arg eq "-mt") {
+    } elsif ($arg eq "-mt" or $arg eq "-mb") {
     } elsif ($arg =~ m@\A-(?:fo|fe)=(.*)\Z(?!\n)@s) {
     } elsif ($arg =~ m@\A-[0-6]\Z(?!\n)@) {
-    } elsif ($arg =~ m@\A-bt(?:(=exe|=com)|)\Z(?!\n)@s) {
+    } elsif ($arg =~ m@\A-bt(?:(=exe|=com|=bin)|)\Z(?!\n)@s) {
       die "$0: fatal: unsupported target: $arg\n" if !defined($1);
     } elsif ($arg =~ m@\A-@) {
       die "$0: fatal: unsupported flag: $arg\n";
@@ -1850,7 +1898,7 @@ for my $srcfn (@sources) {
   my $ext = $objbasefn =~ s@[.]([^./]+)\Z(?!\n)@@s ? lc($1) : "";  # TODO(pts): Port to Win32.
   push @objbasefns, $objbasefn;
   $ext = detect_asm($srcfn) if $ext eq "asm";
-  die "$0: fatal: .$ext source incompatible with -bt=bin: $srcfn\n" if $is_bin and $ext ne "nasm";
+  die "$0: fatal: .$ext source incompatible with -bt=bin: $srcfn\n" if $is_bin and $ext ne "nasm" and $ext ne "wasm";
   if ($ext eq "obj" or $ext eq "lib") { push @objfns, $srcfn; next }
   my $objfn = defined($forced_objfn) ? $forced_objfn : $is_bin ? "$objbasefn.bin" : $PL eq "-c" ? "$objbasefn.obj" : "$objbasefn.tmp.obj";
   push @objfns, $objfn if $PL ne "-pl" and $PL ne "-zs";
@@ -1882,7 +1930,11 @@ for my $srcfn (@sources) {
     }
     splice @nasm_cmd, $nasm_cmd_size;
   } elsif ($ext eq "wasm") {
-    if ($do_create_obj_or_bin) {
+    my $binobjfn;
+    if ($PL eq "-c" and $target eq "bin") {
+      $binobjfn = "$objbasefn.tmp.obj";
+      push @wasm_cmd, "-fo=$binobjfn";
+    } elsif ($do_create_obj_or_bin) {
       die "$0: fatal: .obj output file must have an extension: $objfn\n" if $objfn !~ m@[.][^./]+\Z(?!\n)@;
       push @wasm_cmd, "-fo=$objfn";
     } elsif ($PL eq "-zs") {
@@ -1890,12 +1942,22 @@ for my $srcfn (@sources) {
     } else {
       die "$0: fatal: $PL with .wasm source not supported: $srcfn\n";  # wasm doesn't support -pl, so we don't either.
     }
-    die "$0: fatal: -bt=bin with .wasm source not supported: $srcfn\n" if $is_bin;
     push @wasm_cmd, $srcfn;
-    if (run_command(@wasm_cmd)) {
+    my $is_wasm_error = run_command(@wasm_cmd);
+    if ($is_wasm_error) {
       print STDERR "$0: error: wasm failed\n"; ++$errc;
     }
     splice @wasm_cmd, $wasm_cmd_size;
+    if ($is_bin and !$is_wasm_error) {
+      my $is_nasm = ($PL eq "-cn");  # TODO(pts): Make nonzero work, currently $PL is forced to be "-c" above.
+      my $exefn = $is_nasm ? "$objbasefn.tmp.nasm" : $objfn;
+      my $target2 = "bin";
+      my @objfns = ($binobjfn);
+      print_and_link_executable($is_nasm, $exefn, $target2, $CPUF, $Q, @objfns);
+      if ($is_nasm and run_command("nasm", "-O0", "-f", "bin", "-o", $objfn, $exefn)) {
+        print STDERR "$0: fatal: nasm failed\n"; ++$errc;
+      }
+    }
   } else {
     die "$0: fatal: -bt=bin with wcc source not supported: $srcfn\n" if $is_bin;
     if ($do_create_obj_or_bin or (($PL eq "-pl" or $PL eq "-zs") and $EXEOUT ne "-")) {
