@@ -1341,6 +1341,25 @@ if (@ARGV and $ARGV[0] eq "//link") {
     }
   }
   # Use the compiler frontend to do the linking.
+} elsif (@ARGV and $ARGV[0] eq "//ar") {
+  # //ar supports only a subset of the command-line flags.
+  $is_first_arg = 0;
+  shift(@ARGV);
+  for my $arg (@ARGV) {
+    if ($arg eq "--" or $arg eq "-" or !length($arg)) {
+      die "$0: fatal: unsupported argument: $arg\n";
+    } elsif ($arg eq "-cl") {
+    } elsif ($arg eq "-q" or $arg eq "-nq") {
+    } elsif ($arg =~ m@\A-(?:fo|fe)=(.*)\Z(?!\n)@s) {
+    } elsif ($arg =~ m@\A-@) {
+      die "$0: fatal: unsupported flag: $arg\n";
+    } elsif ($arg =~ m@[.](?:obj)\Z(?!\n)@) {
+    } else {
+      die "$0: fatal: unknown file extension for source file (must be .obj): $arg\n";
+    }
+  }
+  unshift(@ARGV, "-cl");
+  # Use the compiler frontend to do the linking.
 } elsif (@ARGV and $ARGV[0] !~ m@\A-@ and ($ARGV[0] =~ m@[.](?:p[lm]|sh|exe|elf)\Z(?!\n)@i or $ARGV[0] !~ m@[.][^./]+\Z(?!\n)@)) {
   # TODO(pts): Port this to Win32.
   fix_path();
