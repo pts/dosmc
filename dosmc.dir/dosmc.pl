@@ -1305,13 +1305,15 @@ sub find_subcommand_or_perl_script($;$) {
 sub run_found_perl_script {
   my $script = shift(@_);
   die "$0: fatal: Perl script not found: $script\n" if !-f($script);
-  my $script_dir = $script; die "$0: assert: script_dir\n" if $script_dir !~ s@/+[^/]+\Z(?!\n)@@;  # TODO(pts): Port this to Win32.
+  my $script_dir = $script; die "$0: assert: script_dir\n" if $script_dir !~ s@/+([^/]+)\Z(?!\n)@@;  # TODO(pts): Port this to Win32.
+  my $script_basename = $1;
   my @old_argv = @ARGV; my @old_inc = @INC; my $old_path = $ENV{PATH};
   @ARGV = @_;
   unshift @INC, $script_dir, $MYDIR;  # Don't add ".", the script can add it if needed.
   $ENV{PATH} = "$script_dir:$MYDIR:$ENV{PATH}";
   my $result;
-  { local $0 = $script; $result = do($script); @ARGV = @old_argv; @INC = @old_inc; $ENV{PATH} = $old_path; die $@ if $@; }
+  # do($script) won't work, Perl looks at @INC even if $script contains a '/'.
+  { local $0 = $script; $result = do($script_basename); @ARGV = @old_argv; @INC = @old_inc; $ENV{PATH} = $old_path; die $@ if $@; }
   die "$0: fatal: running Perl script $script: $!\n" if !defined($result) and $!;
   $result
 }
