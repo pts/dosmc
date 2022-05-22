@@ -322,6 +322,7 @@ sub load_obj($$;$) {
   my $obj_symbol_prefix = "O$objli\$"; ++$objli;
   my @lnames = ("-LN0");
   my %segment_sizes;
+  my %long_segments;
   my @segment_names = ("-SN");
   my %ledata = map { $_ => "" } @SEGMENT_ORDER;  # $segment_name => $ledata_str.
   my %symbol_ofs;   # $symbol => $ofs. Offset is within its section.
@@ -372,14 +373,13 @@ sub load_obj($$;$) {
         push(@lnames, $fsize == 0 ? "-LNEMPTY" : substr($data, $i, $fsize));
         $i += $fsize;
       }
-    } elsif ($type == 0x98) {  # SEGDEF.
-      die "$0: fatal: SEGDEF too short" if $size < 6;
+    } elsif ($type == 0x98 or $type == 0x99) {  # SEGDEF or long SEGDEF.
+      die "$0: fatal: SEGDEF too short" if $size < 6 + ($type == 0x99);
       my $attr = vec($data, 0, 8);
       die "$0: fatal: unsupported alignment\n" if ($attr >> 5) == 0;
       my $is_big = ($attr >> 1) & 1;
-      my($segment_size, $segment_name_idx) = unpack("vC", substr($data, 1, 3));
+      my($segment_size, $segment_name_idx) = ($type == 0x99) ? unpack("VC", substr($data, 1, 5)) : unpack("vC", substr($data, 1, 3));
       die "$0: fatal: bad segment_name_idx\n" if $segment_name_idx >= @lnames;
-      $segment_size = 0x10000 if $is_big;
       # .obj output of wcc doesn't need uc and _ prefix, but output of nasm may need it.
       my $segment_name = uc($lnames[$segment_name_idx]);
       $segment_name =~ s@\A[_.]+@@;
@@ -389,13 +389,15 @@ sub load_obj($$;$) {
       #print STDERR "info: SEGDEF $segment_name\n";
       # Example alternative spellings: .bss and _BSS.
       die "$0: fatal: duplicate segment (maybe alternative spellings?): $segment_name\n" if exists($segment_sizes{$segment_name});
+      # 2 GiB - 1 byte. Perl may run out of memory earlier.
+      die "$0: fatal: segment $segment_name too large: $segment_size\n" if ($type == 0x99 and $is_big) or $segment_size >> 31;
+      $segment_size = 0x10000 if $is_big;
       $segment_sizes{$segment_name} = $segment_size;
+      $long_segments{$segment_name} = 1 if $type == 0x99;
       # Some segment indexes would become 2 bytes, we do not support that.
       die "$0: fatal: too many segments\n" if @segment_names >= 127;
       push @segment_names, $segment_name;
       #print STDERR "info: SEGDEF: $segment_name size=$segment_size\n";
-    } elsif ($type == 0x99) {  # Long SEGDEF.
-      die "$0: fatal: long SEGDEF not supported\n";
     } elsif ($type == 0xa0) {  # LEDATA.
       die "$0: fatal: LEDATA too short" if $size < 3;
       my($segment_idx, $ofs) = unpack("Cv", substr($data, 0, 3));
@@ -609,7 +611,7 @@ sub load_obj($$;$) {
     } else {
       my $size = $segment_sizes{$segment_name};
       die "$0: assert: segment size mismatch for $segment_name: data_size=$data_size size=$size\n" if
-          ($data_size & 0xffff) != $size;
+          (exists($long_segments{$segment_name}) ? $data_size : $data_size & 0xffff) != $size;
       $segment_sizes{$segment_name} = $data_size;
     }
   }
@@ -1413,8 +1415,8 @@ sub run_command($@) {
 # To force "nasm" result, do any of the following:
 # * Start the file with `%undef aaa'.
 # * Start the file with `%define NASM'.
-sub detect_asm($) {
-  my $asmfn = $_[0];
+sub detect_asm($;$) {
+  my($asmfn, $default) = @_;
   my $f;
   die "$0: fatal: cannot open .asm file for reading: $asmfn\n" if !open($f, "<", $asmfn);
   binmode($f);  # Would also work without it, but be deterministc.
@@ -1422,6 +1424,8 @@ sub detect_asm($) {
   while (<$f>) {
     s@\A\s+@@;
     if (m@\A(?:;|GLOBAL\s+|PUBLIC\s+|ORG\s+)@i) {  # Available in both "wasm" and "nasm".
+    } elsif (m@\A[.]MODEL\s+FLAT\s*(?:;.*)?@si) {
+      close($f); return "wasm-flat";
     } elsif (m@\A([.]|EXTRN\s+|DOSSEG\s+|\w+\s+(?:GROUP|SEGMENT|MACRO|=)\s+)@i) {
       # wasm directives starting with .: .186 .286C .286P .287 .386P .387
       # .486P .586P .686P .8086 .8087 .ALPHA .BREAK .CODE .CONST .CONTINUE
@@ -1438,7 +1442,8 @@ sub detect_asm($) {
     }
   }
   close($f);
-  die "$0: fatal: cannot detect .asm file syntax: $asmfn\n";
+  die "$0: fatal: cannot detect .asm file syntax: $asmfn\n" if !defined($default);
+  $default
 }
 
 my $NASM_OBJ_HEADER = q(
@@ -1849,7 +1854,7 @@ sub compiler_frontend {
   my $wcc_cmd_size = @wcc_cmd;
   my @wasm_cmd = ('wasm', @d_args);
   push @wasm_cmd, $Q if length($Q);
-  push @wasm_cmd, "-ms", "-i=$MYDIR", $CPUF;
+  push @wasm_cmd, "-i=$MYDIR";
   my $wasm_cmd_size = @wasm_cmd;
   my $nasm_cpu = $CPUF eq "-0" ? "8086" : substr($CPUF, 1) . "86";
   # TODO(pts): Copy some flags from @_ (@ARGV), pass as @nasm_flags here.
@@ -1868,8 +1873,10 @@ sub compiler_frontend {
       die "$0: fatal: .$ext source incomplatible with -cl: $srcfn\n" if $PL eq "-cl" and $ext eq "lib";
       push @objfns, $srcfn; next
     }
-    $ext = detect_asm($srcfn) if $ext eq "asm";
-    die "$0: fatal: .$ext source incompatible with -bt=bin: $srcfn\n" if $is_bin and $ext ne "nasm" and $ext ne "wasm";
+    if ($ext eq "asm") { $ext = detect_asm($srcfn) }
+    elsif ($ext eq "wasm") { $ext = detect_asm($srcfn, "wasm") }  # For "wasm-flat".
+    die "$0: fatal: .$ext source incompatible with -bt=bin: $srcfn\n" if $is_bin and $ext ne "nasm" and $ext ne "wasm" and $ext ne "wasm-flat";
+    die "$0: fatal: source uses the flat memory model, it requires -bt=bin: $srcfn\n" if !$is_bin and $ext eq "wasm-flat";
     my $objfn = defined($forced_objfn) ? $forced_objfn : $is_bin ? "$objbasefn.bin" : $PL eq "-c" ? "$objbasefn.obj" : "$objbasefn.tmp.obj";
     push @objfns, $objfn if $PL ne "-pl" and $PL ne "-zs";
     if ($ext eq "nasm" or $ext eq "8") {
@@ -1899,7 +1906,8 @@ sub compiler_frontend {
         print STDERR "$0: error: nasm failed\n"; ++$errc;
       }
       splice @nasm_cmd, $nasm_cmd_size;
-    } elsif ($ext eq "wasm") {
+    } elsif ($ext eq "wasm" or $ext eq "wasm-flat") {
+      push @wasm_cmd, ($ext eq "wasm-flat" ? ("-mf", ($CPUF gt "-3" ? $CPUF : "-3")) : ("-ms", $CPUF));
       my $binobjfn;
       if ($PL eq "-c" and $target eq "bin") {
         $binobjfn = "$objbasefn.tmp.obj";
