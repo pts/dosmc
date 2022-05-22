@@ -315,4 +315,61 @@ Function calling convention (ABI):
   each function call (if changed by the caller before), and before
   returning.
 
+Creating binary files with dosmc:
+
+* Binary files may contain code and data, and can be of any format, without
+  specific support by dosmc. Typical binary files are boot sector images,
+  master boot record images, DOS .sys device drivers, filesystem images.
+* With dosmc, a binary file must be built from a single assembly source file
+  (.wasm or .nasm). (Building binary files from C sources is not supported.)
+* dosmc doesn't add any header bytes, just the bytes corresponding to
+  explicit code (assembly instructions) and data (db, dw, dd etc.) will be
+  added.
+* To create a binary file, use `dosmc -mb' or `dosmc -bt=bin'.
+* From a .nasm source, the binary file is built with `nasm -f bin'. By
+  default, `bits 32' and `cpu 8086' are active, but you can change it in the
+  .nasm source file as many times as needed. You can also use `org ...' to
+  specify the memory base address for offset calculations. The default is
+  `org 0'.
+
+  Typical hello-world.nasm in 16-bit mode:
+
+    org 1234h  ; Optional.
+    dec ax  ; db 'H'
+    db 'ello, World!', 13, 10
+
+  Typical hello-world.nasm in 32-bit mode:
+
+    org 1234h  ; Optional.
+    bits 32
+    cpu 386
+    dec eax  ; db 'H'
+    db 'ello, World!', 13, 10
+
+* From a .wasm source, the binary file is first built with `wasm', and then
+  it is linked to a binary file by the dosmc internal linker (like a .com
+  file, but with `org 0' by default).  The default is `-ms -0' (`.model
+  small', `.8086' and .code with use16), but you can change it to `-mf -3'
+  (`.model flat', .386' and .code with use32) by specifying `.model flat' at
+  the beginning of the .wasm (or .asm) source file. You can also use `org ...'
+  after `.code' to specify the memory base address for offset calculations.
+  The default is `org 0'.
+
+  Typical hello-world.wasm in 16-bit mode:
+
+    .code
+    org 1234h  ; Optional.
+    dec ax  ; db 'H'
+    db 'ello, World!', 13, 10
+    end
+
+  Typical hello-world.wasm in 32-bit mode:
+
+    .model flat
+    .code
+    org 1234h  ; Optional.
+    dec eax  ; db 'H'
+    db 'ello, World!', 13, 10
+    end
+
 __END__
