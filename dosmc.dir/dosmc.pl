@@ -400,7 +400,10 @@ sub load_obj($$;$) {
       $size -= 3; substr($data, 0, 3) = "";
       $add_ledata_sub->($segment_idx, $ofs, $data);
     } elsif ($type == 0xa1) {  # Long LEDATA.
-      die "$0: fatal: long LEDATA not supported\n";
+      die "$0: fatal: long LEDATA too short" if $size < 5;
+      my($segment_idx, $ofs) = unpack("CV", substr($data, 0, 5));
+      $size -= 5; substr($data, 0, 5) = "";
+      $add_ledata_sub->($segment_idx, $ofs, $data);
     } elsif ($type == 0x90 or $type == 0xb6) {  # PUBDEF or LPUBDEF(static).
       my $recname = $type == 0xb6 ? "LPUBDEF" : "PUBDEF";
       # $ as a prefix would make nasm to treat it as a symbol name, e.g. $ax
