@@ -278,10 +278,11 @@ sub emit_nasm_segment($$$$$$) {
       if ($i < $ofs) {
         my $line = unpack("H*", substr($data, $i, $ofs - $i)); $line =~ s@(..)(?=.)@$1, 0x@sg; print $exef "db 0x$line\n";
       }
-      my $base = sprintf("0x%x", unpack("v", substr($data, $ofs, 2)));
-      my $size = $endofs - $ofs;
-      my $rel = $ltypem < 0 ? "-(\$+$size)" : "";
-      print $exef "$ASM_DATA_OP{$size} $base+$symbol$rel\n";
+      my $lsize = $endofs - $ofs;
+      my $pack_pattern = $lsize == 2 ? "v" : "V";
+      my $base = sprintf("0x%x", unpack($pack_pattern, substr($data, $ofs, $lsize)));
+      my $rel = $ltypem < 0 ? "-(\$+$lsize)" : "";
+      print $exef "$ASM_DATA_OP{$lsize} $base+$symbol$rel\n";
       $i = $endofs;
     }
     if ($i < $j) {
@@ -329,7 +330,7 @@ sub load_obj($$;$) {
   my @extdef = ("-ED");
   my %fixupp = map { $_ => [] } @SEGMENT_ORDER;  # $segment_name => [[$endofs, $ofs, $ltypem, $symbol], ...].
   my $has_string_instructions = 0;
-  my($last_segment_name, $last_ofs);
+  my($last_segment_name, $last_ledata_ofs);
   my $text_vofs = 0;
   my $add_ledata_sub = sub {
     my($segment_idx, $ofs, $data) = @_;
@@ -337,18 +338,18 @@ sub load_obj($$;$) {
     my $segment_name = $segment_names[$segment_idx];
     die "$0: fatal: LEDATA not allowed in segment $segment_name\n" if
         $segment_name eq "_BSS" or $segment_name eq "STACK";
-    $last_ofs = length($ledata{$segment_name});
-    #print STDERR "info: LEDATA: $segment_name last_ledata_ofs=$last_ofs ofs=$ofs size=$size\n";
-    if ($last_ofs == 0 and $segment_name eq "_TEXT" and ref($text_vofs_ref) and !defined($$text_vofs_ref)) {
+    $last_ledata_ofs = length($ledata{$segment_name});
+    #print STDERR "info: LEDATA: $segment_name last_ledata_ofs=$last_ledata_ofs ofs=$ofs size=$size\n";
+    if ($last_ledata_ofs == 0 and $segment_name eq "_TEXT" and ref($text_vofs_ref) and !defined($$text_vofs_ref)) {
       $$text_vofs_ref = $text_vofs = $ofs;  # In .wasm for -bt=bin: `.code', then `org ...'.
-      $last_ofs = 0;
+      $last_ledata_ofs = 0;
     } else {
       $ofs -= $text_vofs if $segment_name eq "_TEXT";
       my $size = length($data);
-      die "$0: fatal: gap in LEDATA for $segment_name: last_ledata_ofs=$last_ofs ofs=$ofs size=$size\n" if $last_ofs  != $ofs;
+      die "$0: fatal: gap in LEDATA for $segment_name: last_ledata_ofs=$last_ledata_ofs ofs=$ofs size=$size\n" if $last_ledata_ofs  != $ofs;
     }
     $ledata{$segment_name} .= $data;
-    $last_segment_name = $segment_name;  # For FIXUPP, also $last_ofs.
+    $last_segment_name = $segment_name;  # For FIXUPP, also $last_ledata_ofs.
   };
   while (1) {  # Read next .obj record.
     my $data;
@@ -455,8 +456,8 @@ sub load_obj($$;$) {
       }
     } elsif ($type == 0xb5) {  # Long LEXTDEF.
       die "$0: fatal: long LEXTDEF not supported\n";
-    } elsif ($type == 0x9c) {  # FIXUPP.
-      die "$0: fatal: FIXUPP must follow LEDATA\n" if !defined($last_ofs);
+    } elsif ($type == 0x9c or $type == 0x9d) {  # FIXUPP or long FIXUPP.
+      die "$0: fatal: FIXUPP must follow LEDATA\n" if !defined($last_ledata_ofs);
       die "$0: fatal: FIXUPP not allowed in segment $last_segment_name\n" if
           $last_segment_name eq "_BSS" or $last_segment_name eq "STACK";
       for (my $i = 0; $i < $size; ) {
@@ -470,9 +471,12 @@ sub load_obj($$;$) {
         die "$0: fatal: target thread not supported\n" if $fd & 8;
         my $is_self = ~($a >> 6) & 1;
         my $ltype = ($a >> 2) & 15;  # 1: offset; 2. base segment.
-        my $lsize = ($ltype == 1 or $ltype == 2) ? 2 : ($ltype == 3) ? 4 : undef;
+        die "$0: fatal: 4-bit ltype not allowed with short FIXUPP: $ltype\n" if $type == 0x9c and ($ltype & 8);
+        die "$0: fatal: ambiguous ltype not supported: $ltype\n" if $ltype == 5 or $ltype == 6;
+        my $lsize = ($ltype == 1 or $ltype == 2) ? 2 : ($ltype == 3 or $ltype == 9) ? 4 : undef;
+        $ltype = 1 if $ltype == 9;  # 9 is the same, but 32 bits.
         my $ltypem = $is_self ? -$ltype : $ltype;
-        $ofs = $last_ofs + ($ofs | ($a & 3) << 8);
+        $ofs = $last_ledata_ofs + ($ofs | ($a & 3) << 8);
         my $endofs = $ofs + ($lsize or 1);
         my $size_limit = length($ledata{$last_segment_name});
         die "$0: fatal: FIXUPP data record offset too large in segment $last_segment_name: got=$endofs max=$size_limit\n" if
@@ -522,21 +526,22 @@ sub load_obj($$;$) {
           $symbol = "OS\$${segment_name}";
           die "$0: fatal: stack FIXUPP outside segment _TEXT\n" if
               $segment_name eq "STACK" and $last_segment_name ne "_TEXT";
-          if ($target == 0) {  # 2-byte displacement.
-            die "$0: fatal: EOF in FIXUPP displacement\n" if $i + 2 > $size;
-            my $dofs = unpack("v", substr($data, $i, 2)); $i += 2;
-            substr($ledata{$last_segment_name}, $ofs, 2) = pack("v", unpack("v", substr($ledata{$last_segment_name}, $ofs, 2)) + $dofs) if $dofs;
+          if ($target == 0) {  # 2-byte or 4-byte target displacement.
+            my $dsize = ($type == 0x9c) ? 2 : 4;
+            my $pack_pattern = ($dsize == 2)  ? "v" : "V";
+            die "$0: fatal: EOF in FIXUPP displacement\n" if $i + $dsize > $size;
+            my $dofs = unpack($pack_pattern, substr($data, $i, $dsize));
+            $i += $dsize;
+            substr($ledata{$last_segment_name}, $ofs, $dsize) = pack($pack_pattern, unpack($pack_pattern, substr($ledata{$last_segment_name}, $ofs, $dsize)) + $dofs) if $dofs;
           }
         } else {
-          die "$0: fatal: unsupported FIXUPP: ltype=$ltype frame=$frame target=$target\n";
+          die "$0: fatal: unsupported FIXUPP: ltype=$ltype frame=$frame target=$target endofs=$endofs ofs=$ofs\n";
         }
         if (!(ref($text_vofs_ref) and $symbol eq "OS\$_TEXT" and ($ltypem == 1 or $ltypem == 5 or $ltypem == 9))) {
           #print STDERR "info: add FIXUPP: segment=$last_segment_name endofs=$endofs ofs=$ofs ltypem=$ltypem symbol=$symbol\n";
           push @$fixuppr, [$endofs, $ofs, $ltypem, $symbol];
         }
       }
-    } elsif ($type == 0x9d) {  # Long FIXUPP.
-      die "$0: fatal: long FIXUPP not supported\n";
     } elsif ($type == 0x8a) {  # MODEND.
       if ($size) {
         my $b = vec($data, 0, 8);
@@ -584,7 +589,7 @@ sub load_obj($$;$) {
       # We do not need to support common symbols, wcc never generates them.
       die sprintf("%s: fatal: unsupported obj record type: type=0x%x size=%d\n", $0, $type, $size);
     }
-    $last_segment_name = $last_ofs = undef if $type != 0xa0 and $type != 0xa1 and $type != 0x9c;
+    $last_segment_name = $last_ledata_ofs = undef if $type != 0xa0 and $type != 0xa1 and $type != 0x9c;
   }  # .obj record.
   last if $is_just_after_modend;
   my $code_type = is_complicated_8086_code($ledata{_TEXT}, $fixupp{_TEXT}, $segment_symbols{_TEXT});
@@ -824,7 +829,11 @@ sub link_executable($$$$@) {
         for my $fixup (@{$obj_fixupp->{$segment_name}}) {  # Preprocess fixups.
           my($endofs, $ofs, $ltypem, $symbol) = @$fixup;
           $has_base_fixup = 1 if $symbol =~ m@\ASB\$@;
-          substr($$datar, $ofs, 2) = pack("v", unpack("v", substr($$datar, $ofs, 2)) + $old_segment_sizes{$1}) if $symbol =~ s@\AOS\$(?=(.*))@S\$@s;
+          if ($symbol =~ s@\AOS\$(?=(.*))@S\$@s) {
+            my $lsize = $endofs - $ofs;
+            my $pack_pattern = $lsize == 2 ? "v" : "V";
+            substr($$datar, $ofs, $lsize) = pack($pack_pattern, unpack($pack_pattern, substr($$datar, $ofs, $lsize)) + $old_segment_sizes{$1})
+          }
           $has_stack_fixup = 1 if $symbol eq "S\$STACK";  # Was OS$STACK just above.
           push @$fixupr, [$endofs + $segment_ofs, $ofs + $segment_ofs, $ltypem, $symbol];
         }
@@ -933,7 +942,7 @@ sub link_executable($$$$@) {
       my $stack_size_data = pack("v", $segment_sizes{STACK});
       for my $fixup (@$fixupr) {
         my($endofs, $ofs, $ltypem, $symbol) = @$fixup;
-        substr($$datar, $ofs, 2) = "\0\0" if $symbol eq "S\$STACK" and $ltypem == 1;  # Always 1, it's offset. Set displacement to 0.
+        substr($$datar, $ofs, $endofs - $ofs) = "\0" x ($endofs - $ofs) if $symbol eq "S\$STACK" and $ltypem == 1;  # Always 1, it's offset. Set displacement to 0.
         die "$0: fatal: general segment-base fixup unsupported: $1\n" if $symbol =~ m@\ASB\$(.*)@s;
       }
     }
@@ -1229,10 +1238,12 @@ call__fullprog_end:  ; Make fullprog_code without fullprog_end fail.
         my($endofs, $ofs, $ltypem, $symbol) = @$fixup;
         die "$0: assert: bad endofs in fixup\n" if $endofs > length($data);
         die "$0: assert: unknown symbol in fixup: $symbol\n" if !defined($symbol_vofs{$symbol});
-        my $svofs = $symbol_vofs{$symbol} + unpack("v", substr($data, $ofs, 2));
-        #printf STDERR "info: fixup \@0x%04x base=0x%04x symbol=%s add=0x%04x is_rel=%d\n", $ofs, unpack("v", substr($data, $ofs, 2)), $symbol, $symbol_vofs{$symbol}, ($ltypem < 0 or 0);
+        my $lsize = $endofs - $ofs;
+        my $pack_pattern = $lsize == 2 ? "v" : "V";
+        my $svofs = $symbol_vofs{$symbol} + unpack($pack_pattern, substr($data, $ofs, $lsize));
+        #printf STDERR "info: fixup \@0x%04x base=0x%04x symbol=%s add=0x%04x is_rel=%d\n", $ofs, unpack($pack_pattern, substr($data, $ofs, $lsize)), $symbol, $symbol_vofs{$symbol}, ($ltypem < 0 or 0);
         $svofs -= $endofs + $this_segment_vofs if $ltypem < 0;
-        substr($data, $ofs, 2) = pack("v", $svofs);
+        substr($data, $ofs, $lsize) = pack($pack_pattern, $svofs);
       }
       print $exef $data;
     }

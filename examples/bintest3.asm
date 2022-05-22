@@ -18,6 +18,9 @@ db (98765) dup (90h)
 my_cli:
 cli
 dd offset my_cli + 8000h  ; `offset' is still a 2-byte relocation, but since it points to _TEXT, the dosmc linker skips it, and all 4 bytes are correct.
+.386
+mov eax, 5678abcdh
+mov eax, offset answer3d
 ;dd (offset answer2) + 0ffffh  ; SUXX: This is still 2-byte relocation.
 ;dd (offset answer2) + 0h  ; SUXX: This (offset) is still 2-byte relocation. There is no offset386.
 ;dw (offset answer2) shr 16  ; E074: Constant operand is expected

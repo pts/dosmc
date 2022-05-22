@@ -11,6 +11,9 @@ times 98765 nop
 my_cli:
 cli
 dd my_cli + 0x8000
+cpu 386
+mov eax, 0x5678abcd
+mov eax, answer3d
 _DATA:
 answer2d: dw 0xb
 answer3d: dw 0x13
