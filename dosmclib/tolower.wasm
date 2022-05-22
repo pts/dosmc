@@ -1,0 +1,15 @@
+		public tolower_
+		extrn _small_code_:byte
+		.code
+
+; int tolower(int c);
+; Optimized for size.
+tolower_:	sub al, 'A'
+		cmp al, 'Z' - 'A'
+		ja @$done
+		add al, 'a' - 'A'
+@$done:		add al, 'A'
+		cbw			; Sign-extend AL to AX.
+		ret
+
+		end

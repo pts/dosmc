@@ -1,0 +1,17 @@
+		public strlen_
+		extrn _small_code_:byte
+		.code
+
+; size_t strlen(const char *s);
+; Optimized for size.
+strlen_:	push si
+		xchg si, ax		; SI := AX, AX := junk.
+		mov ax, -1
+@$again:	cmp byte ptr [si], 1
+		inc si
+		inc ax
+		jnc @$again
+		pop si
+		ret
+
+		end

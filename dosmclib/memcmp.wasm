@@ -1,0 +1,25 @@
+		public memcmp_
+		extrn _small_code_:byte
+		.code
+
+; int memcmp(const void *s1, const void *s2, size_t n);
+; Optimized for size. AX == s1, DX == s2, BX == n.
+memcmp_:	push si
+		push ds
+		pop es
+		xchg si, ax		; SI := s1, AX := junk.
+		xor ax, ax
+		xchg di, dx
+		xchg cx, bx
+		jcxz @$done
+		repz cmpsb		; Continue while equal.
+		je @$done
+		inc ax
+		jnc @$done
+		neg ax
+@$done:		xchg cx, bx		; Restore original CX.
+		xchg di, dx		; Restore original DI.
+		pop si
+		ret
+
+		end

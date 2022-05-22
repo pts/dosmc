@@ -1,0 +1,14 @@
+		public isalpha_
+		extrn _small_code_:byte
+		.code
+
+; int isalpha(int c);
+; Optimized for size.
+isalpha_:	or al, 32		; Covert to ASCII uppercase.
+		sub al, 'a'
+		cmp al, 'z' - 'a' + 1
+@$done:		mov ax, 0
+		adc al, 0
+		ret
+
+		end

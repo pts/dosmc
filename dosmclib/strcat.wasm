@@ -1,0 +1,27 @@
+		public strcat_
+		extrn _small_code_:byte
+		.code
+
+; char *strcat(char *dest, const char *src);
+; Optimized for size. AX == s1, DX == s2.
+; TODO(pts): Check the Watcom libc if it is any shorter.
+strcat_:	push di
+		push ds
+		pop es
+		xchg si, dx
+		xchg di, ax		; DI := dest; AX := junk.
+		push di
+		dec di
+@$skipagain:	inc di
+		cmp byte ptr [di], 1
+		jnc @$skipagain
+@$again:	lodsb
+		stosb
+		cmp al, 0
+		jne @$again
+		pop ax			; Will return dest.
+		xchg si, dx		; Restore SI.
+		pop di
+		ret
+
+		end

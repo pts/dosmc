@@ -1852,6 +1852,7 @@ sub compiler_frontend {
   push @wcc_cmd, $Q if length($Q);
   push @wcc_cmd, $PL if $PL eq "-pl" or $PL eq "-zs";
   # We don't pass any -bt=..., because wcc ignres all -bt...  arguments.
+  # TODO(pts): Add ability to disable -we (+we ?).
   push @wcc_cmd, "-ms", "-i=$MYDIR", "-s", "-os", "-W", "-w4", "-wx", "-we", "-wcd=202", $CPUF, "-fr", @wcc_args;
   my $wcc_cmd_size = @wcc_cmd;
   my @wasm_cmd = ('wasm', @d_args);

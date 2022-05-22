@@ -1,0 +1,16 @@
+		public remove_
+		public unlink_
+		extrn _small_code_:byte
+		.code
+
+; int remove(const char *fn);
+; int unlink(const char *fn);
+; Optimized for size.
+unlink_:
+remove_:	xchg dx, ax		; DX := AX, AX := junk.
+		mov ah, 41h
+		int 21h
+		sbb ax, ax		; AX := -1 on error (CF), 0 otherwise.
+		ret
+
+		end

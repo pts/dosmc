@@ -1,0 +1,16 @@
+		public isspace_
+		extrn _small_code_:byte
+		.code
+
+; int isspace(int c);
+; Optimized for size.
+isspace_:	sub al, 9
+		cmp al, 13 - 9 + 1
+		jc @$done		; ASCII 9 .. 13 are whitespace.
+		sub al, ' ' - 9		; ASCII ' ' is whitespace.
+		cmp al, 1
+@$done:		mov ax, 0
+		adc al, 0
+		ret
+
+		end

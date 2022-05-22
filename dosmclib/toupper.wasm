@@ -1,0 +1,15 @@
+		public toupper_
+		extrn _small_code_:byte
+		.code
+
+; int toupper(int c);
+; Optimized for size.
+toupper_:	sub al, 'a'
+		cmp al, 'z' - 'a'
+		ja @$done
+		add al, 'A' - 'a'
+@$done:		add al, 'a'
+		cbw			; Sign-extend AL to AX.
+		ret
+
+		end

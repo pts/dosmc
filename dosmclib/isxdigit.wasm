@@ -1,0 +1,17 @@
+		public isxdigit_
+		extrn _small_code_:byte
+		.code
+
+; int isxdigit(int c);
+; Optimized for size.
+isxdigit_:	sub al, '0'
+		cmp al, '9' - '0' + 1
+		jc @$done
+		or al, 32		; Covert to ASCII uppercase.
+		sub al, 'a' - '0'
+		cmp al, 'f' - 'a' + 1
+@$done:		mov ax, 0
+		adc al, 0
+		ret
+
+		end

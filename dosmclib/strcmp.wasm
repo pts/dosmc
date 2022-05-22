@@ -1,0 +1,27 @@
+		public strcmp_
+		extrn _small_code_:byte
+		.code
+
+; int strcmp(const void *s1, const void *s2);
+; Optimized for size. AX == s1, DX == s2.
+; TODO(pts): Check the Watcom libc if it is any shorter.
+strcmp_:	push si
+		push ds
+		pop es
+		xchg si, ax		; SI := s1, AX := junk.
+		xor ax, ax
+		xchg di, dx
+@$next:		lodsb
+		scasb
+		jne @$diff
+		cmp al, 0
+		je @$done
+		jmp short @$next
+@$diff:		mov al, 1
+		jnc @$done
+		neg ax
+@$done:		xchg di, dx		; Restore original DI.
+		pop si
+		ret
+
+		end

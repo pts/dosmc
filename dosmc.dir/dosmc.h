@@ -10,6 +10,14 @@
 
 #define __PRAGMA(X) _Pragma(#X)
 
+typedef unsigned char uint8_t;
+typedef unsigned short uint16_t;
+typedef unsigned long uint32_t;
+typedef char int8_t;
+typedef short int16_t;
+typedef long int32_t;
+typedef unsigned int size_t;  /* TODO(pts): 64-bit tcc. */
+
 /* Can be specified multiple times (and will be emitted once each for .c,
  * and deduplicate for .nasm). Works with or without trailing semicolon.
  * Works in both .c and .nasm source files.
@@ -85,8 +93,8 @@ modify [ ax cx dx di ];  /* Also modifies cf */
 
 /* TODO(pts): Make it not inline, in case it's called multiple times. */
 /* This implementation is optimized for size. */
-unsigned strlen(const char *s);
-static unsigned strlen_inline(const char *s);
+size_t strlen(const char *s);
+static size_t strlen_inline(const char *s);
 #pragma aux strlen_inline = \
 "mov ax, -1" \
 "again: cmp byte ptr [si], 1" \
@@ -95,6 +103,54 @@ static unsigned strlen_inline(const char *s);
 "jnc again" \
 parm [ si ] \
 modify [ si ];
+
+int memcmp(const void *s1, const void *s2, size_t n);
+static int memcmp_inline(const void *s1, const void *s2, size_t n);
+#pragma aux memcmp_inline = \
+"xor ax, ax" \
+"repz cmpsb" \
+"je @$done" \
+"inc ax" \
+"jnc @$done" \
+"neg ax" \
+"@$done:" \
+parm [ si ] [ di ] [ cx] \
+modify [ si di cx ];
+
+int strcmp(const char *s1, const char *s2);
+static int strcmp_inline(const char *s1, const char *s2);
+#pragma aux strcmp_inline = \
+"xor ax, ax" \
+"mov cx, -1" \
+"repz cmpsb" \
+"je @$done" \
+"inc ax" \
+"jnc @$done" \
+"neg ax" \
+"@$done:" \
+parm [ si ] [ di ] \
+modify [ si di cx ];
+
+char *strcpy(char *dest, const char *src);
+static char *strcpy_inline(char *dest, const char *src);
+#pragma aux strcpy_inline = \
+"push di" \
+"@$again: lodsb" \
+"stosb" \
+"cmp al, 0" \
+"jne @$again" \
+"pop ax" \
+parm [ di ] [ si ] \
+modify [ si di ];
+
+char *strcat(char *dest, const char *src);
+
+int tolower(int c);
+int toupper(int c);
+int isdigit(int c);
+int isxdigit(int c);
+int isalpha(int c);
+int isspace(int c);
 
 /* Writes a '\0'-terminated string to stdout. */
 static inline void oputs(const char *s) {
@@ -187,7 +243,10 @@ static inline void exit(int status);
 "mov ah, 0x4c" \
 "int 0x21" \
 aborts \
-parm [ al ] \
+parm [ ax ] \
 modify [ ah ];
+
+int remove(const char *pathname);
+int unlink(const char *pathname);  /* Same as remove(). */
 
 #endif  /* _DOSMC_H_ */
