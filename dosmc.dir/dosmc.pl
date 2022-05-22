@@ -20,7 +20,7 @@
 # !! Add option for word alignment of data segments, for speed.
 # !! Add -bt=auto for using .com if it fits to 64 KiB of memory, otherwise using .exe. Also autodetect .bin for a single .nasm source file with non-0x100 org in the beginning.
 # !! Patch `END' to `END ...' in the -cw output. This is hard (needs .obj file modification to add an LPUBDEF) if there is no label for that already.
-# !! Add -cm to produce .nasm (from .obj, using db for instructions) which can be used next time to produce an identical executable. This is similar to -cn, but will need `nasm -f obj' and doesn't link .obj files together.
+# !! Add -cm to produce .nasm (from .obj, using db for instructions) which can be fed to dosmc to produce an identical executable. This is similar to -cn, but will need `nasm -f obj' and doesn't link .obj files together.
 # !! Cleanup flag to remove .tmp files.
 # !! doc: http://nuclear.mutantstargoat.com/articles/retrocoding/dos01-setup/
 # !! doc: http://alexfru.narod.ru/os/c16/c16.html
@@ -1388,7 +1388,7 @@ if (@ARGV and $ARGV[0] eq "//link") {
   for my $arg (@ARGV) {
     if ($arg eq "--" or $arg eq "-" or !length($arg)) {
       die "$0: fatal: unsupported argument: $arg\n";
-    } elsif ($arg eq "-ce" or $arg eq "-cn") {
+    } elsif ($arg eq "-ce" or $arg eq "-cn" or $arg eq "-cldi" or $arg eq "-cldn") {
     } elsif ($arg eq "-q" or $arg eq "-nq") {
     } elsif ($arg eq "-mt" or $arg eq "-mb") {
     } elsif ($arg =~ m@\A-(?:fo|fe)=(.*)\Z(?!\n)@s) {
@@ -1439,6 +1439,7 @@ my @sources;
 my @wcc_args;
 my @defines;
 my $do_add_libc = 1;
+my $do_link_with_nasm = 0;
 
 for my $arg (@ARGV) {
   if ($arg eq "--" or $arg eq "-" or !length($arg)) {
@@ -1446,13 +1447,20 @@ for my $arg (@ARGV) {
   } elsif ($arg eq "-pl" or  # Do preprocessing only to stdout by default (also wcc).
            $arg eq "-zs" or  # Do syntax check only (also wcc).
            $arg eq "-c"  or  # Compile to .obj or .bin files, don't link (hardcoded to wcc, also wcl).
+           $arg eq "-cd" or  # Compile and link to executable (.com or .exe).
            $arg eq "-ce" or  # Compile and link to executable (.com or .exe) directly (default, no wcc, no wcl).
            $arg eq "-cn" or  # Compile and link to executable (.com or .exe) using nasm while linking (no wcc, no wcl).
            $arg eq "-cl" or  # Compile and build static library (.lib) from the .obj files.
            $arg eq "-cw" or  # Compile to .wasm files, don't link (no wcc, no wcl). .wasm output can be used next time instead of .obj (-c), except that !! the entry point is omitted (i.e. wdis emits `END' instead of `END ...').
            0) {
+    if ($arg eq "-ce" ) { $arg = "-cd"; $do_link_with_nasm = 0; }
+    elsif ($arg eq "-cn") { $arg = "-cd"; $do_link_with_nasm = 1; }
     die "$0: fatal: conflicting output modes: $PL vs $arg\n" if length($PL) and $PL ne $arg;
     $PL = $arg;
+  } elsif ($arg eq "-cldn") {  # Link with nasm. No such flag in wcc or wcl.
+    $do_link_with_nasm = 1;
+  } elsif ($arg eq "-cldi") {  # Link with internal linker. No such flag in wcc or wcl.
+    $do_link_with_nasm = 0;
   } elsif ($arg eq "-q") {
     $Q = $arg;  # Quiet. Default.
   } elsif ($arg eq "-nq") {  # No such flag in wcc or wcl.
@@ -1500,16 +1508,16 @@ die "$0: fatal: missing source file argument\n" if !@sources;
 $target = $EXEOUT =~ m@[.]com\Z(?!\n)@i ? "com" : $EXEOUT =~ m@[.]bin\Z(?!\n)@i ? "bin" : "" if !length($target);
 $PL = "-c" if !length($PL) and $target eq "bin";
 if (!length($PL)) {
-  my %ext_to_pl = ("obj" => "-c", "com" => "-ce", "exe" => "-ce", "bin" => "-c", "lib" => "-cl", "wasm" => "-cw", "asm" => "-cw");
+  my %ext_to_pl = ("obj" => "-c", "com" => "-cd", "exe" => "-cd", "bin" => "-c", "lib" => "-cl", "wasm" => "-cw", "asm" => "-cw");
   my $exe_ext = $EXEOUT =~ m@[.]([^./]+)\Z(?!\n)@ ? lc($1) : "";
-  $PL = exists($ext_to_pl{$exe_ext}) ? $ext_to_pl{$exe_ext} : "-ce";
+  $PL = exists($ext_to_pl{$exe_ext}) ? $ext_to_pl{$exe_ext} : "-cd";
 }
 die "$0: fatal: output mode incompatible with -bt=bin: $PL\n" if
     $target eq "bin" and $PL ne "-c" and $PL ne "-pl" and $PL ne "-zs";
 if (!length($EXEOUT)) {
   if ($PL eq "-pl" or $PL eq "-zs") {
     $EXEOUT = "-";
-  } elsif ($PL eq "-cn" or $PL eq "-ce" or $PL eq "-cl") {
+  } elsif ($PL eq "-cd" or $PL eq "-cl") {
     my $in1base = $sources[0]; $in1base =~ s@[.][^./]+\Z(?!\n)@@s;  # TODO(pts): Port to Win32.
     $EXEOUT = "$in1base." . (($PL eq "-cl") ? "lib" : length($target) ? $target : "exe");
   }
@@ -1527,7 +1535,7 @@ if ($target eq "bin") {
         $ext ne "nasm" and $ext ne "wasm" and $ext ne "asm" and $ext ne "8";
   }
 }
-my $is_multiple_sources_ok = ($PL eq "-ce" or $PL eq "-cn" or $PL eq "-cl" or !length($EXEOUT)) ? 1 : ($PL eq "-pl" or $PL eq "-zs" or $PL eq "-cw") ? ($EXEOUT eq "-" ? 1 : 0) : 0;
+my $is_multiple_sources_ok = ($PL eq "-cd" or $PL eq "-cl" or !length($EXEOUT)) ? 1 : ($PL eq "-pl" or $PL eq "-zs" or $PL eq "-cw") ? ($EXEOUT eq "-" ? 1 : 0) : 0;
 die "$0: fatal: multiple source file arguments with $PL\n" if !$is_multiple_sources_ok and @sources > 1;
 { my %output_files;
   if (length($EXEOUT)) {
@@ -1904,8 +1912,8 @@ my @nasm_cmd = ("nasm", @d_args, "-O9", "-f", $is_bin ? "bin" : "obj", "-w+orpha
 my $nasm_cmd_size = @nasm_cmd;
 my @objfns;
 my @objbasefns;
-my $do_create_obj_or_bin = ($PL eq "-cw" or $PL eq "-ce" or $PL eq "-cn" or $PL eq "-cl" or $PL eq "-c");
-my $forced_objfn = (($PL ne "-cw" and $PL ne "-ce" and $PL ne "-cn" and $PL ne "-cl") and length($EXEOUT)) ? $EXEOUT : undef;
+my $do_create_obj_or_bin = ($PL eq "-cw" or $PL eq "-cd" or $PL eq "-cl" or $PL eq "-c");
+my $forced_objfn = (($PL ne "-cw" and $PL ne "-cd" and $PL ne "-cl") and length($EXEOUT)) ? $EXEOUT : undef;
 my $errc = 0;
 for my $srcfn (@sources) {
   my $objbasefn = $srcfn;
@@ -1966,12 +1974,11 @@ for my $srcfn (@sources) {
     }
     splice @wasm_cmd, $wasm_cmd_size;
     if ($is_bin and !$is_wasm_error) {
-      my $is_nasm = ($PL eq "-cn");  # TODO(pts): Make nonzero work, currently $PL is forced to be "-c" above.
-      my $exefn = $is_nasm ? "$objbasefn.tmp.nasm" : $objfn;
+      my $exefn = $do_link_with_nasm ? "$objbasefn.tmp.nasm" : $objfn;
       my $target2 = "bin";
       my @objfns = ($binobjfn);
-      print_and_link_executable($is_nasm, $exefn, $target2, $CPUF, $Q, @objfns);
-      if ($is_nasm and run_command("nasm", "-O0", "-f", "bin", "-o", $objfn, $exefn)) {
+      print_and_link_executable($do_link_with_nasm, $exefn, $target2, $CPUF, $Q, @objfns);
+      if ($do_link_with_nasm and run_command("nasm", "-O0", "-f", "bin", "-o", $objfn, $exefn)) {
         print STDERR "$0: fatal: nasm failed\n"; ++$errc;
       }
     }
@@ -1996,19 +2003,18 @@ if ($errc) {
 }
 
 if ($is_bin) {  # nasm has already finished.
-} elsif ($PL eq "-ce" or $PL eq "-cn") {
+} elsif ($PL eq "-cd") {
   if ($do_add_libc and @objfns) {
     push @objfns, "$MYDIR/dosmc.lib";
     pop @objfns if !-f($objfns[-1]);
   }
-  my $is_nasm = $PL eq "-cn" ? 1 : 0;
   my $in1base = $sources[0]; $in1base =~ s@[.][^./]+\Z(?!\n)@@s;  # TODO(pts): Port to Win32.
-  my $exefn = $is_nasm ? "$in1base.tmp.nasm" : $EXEOUT;
+  my $exefn = $do_link_with_nasm ? "$in1base.tmp.nasm" : $EXEOUT;
   my $target2 = length($target) ? $target : "exe";
-  print_and_link_executable($is_nasm, $exefn, $target2, $CPUF, $Q, @objfns);
+  print_and_link_executable($do_link_with_nasm, $exefn, $target2, $CPUF, $Q, @objfns);
   # .nasm output ($EXEFN) cannot be used to produce an .obj file again (i.e. nasm -f obj).
   # TODO(pts): Add support for this, preferably autodetection.
-  if ($is_nasm and run_command("nasm", "-O0", "-f", "bin", "-o", $EXEOUT, $exefn)) {
+  if ($do_link_with_nasm and run_command("nasm", "-O0", "-f", "bin", "-o", $EXEOUT, $exefn)) {
     print STDERR "$0: fatal: nasm failed\n"; exit(6);
   }
 } elsif ($PL eq "-cl") {
