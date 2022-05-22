@@ -1897,9 +1897,12 @@ for my $srcfn (@sources) {
   my $objbasefn = $srcfn;
   my $ext = $objbasefn =~ s@[.]([^./]+)\Z(?!\n)@@s ? lc($1) : "";  # TODO(pts): Port to Win32.
   push @objbasefns, $objbasefn;
+  if ($ext eq "obj" or $ext eq "lib") {
+    die "$0: fatal: .$ext source incomplatible with -cl: $srcfn\n" if $PL eq "-cl" and $ext eq "lib";
+    push @objfns, $srcfn; next
+  }
   $ext = detect_asm($srcfn) if $ext eq "asm";
   die "$0: fatal: .$ext source incompatible with -bt=bin: $srcfn\n" if $is_bin and $ext ne "nasm" and $ext ne "wasm";
-  if ($ext eq "obj" or $ext eq "lib") { push @objfns, $srcfn; next }
   my $objfn = defined($forced_objfn) ? $forced_objfn : $is_bin ? "$objbasefn.bin" : $PL eq "-c" ? "$objbasefn.obj" : "$objbasefn.tmp.obj";
   push @objfns, $objfn if $PL ne "-pl" and $PL ne "-zs";
   if ($ext eq "nasm" or $ext eq "8") {
