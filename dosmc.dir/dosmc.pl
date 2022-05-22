@@ -152,7 +152,7 @@ sub build_static_library($@) {
 sub get_8086_exit_code($$) {
   my($data, $text_symbol_ofsr) = @_;
   pos($data) = defined($text_symbol_ofsr->{_start_}) ? $text_symbol_ofsr->{_start_} : $text_symbol_ofsr->{main_};
-  return 0 if $data =~ /\G(?:\x31\xC0)?\xC3/gcs;  # xor ax, ax;; ret
+  return 0 if $data =~ /\G(?:\x31\xC0)?(?:\xC3|\xCD\x20)/gcs;  # xor ax, ax;; ret/int 0x20
   $data =~ /\G[\x06\x0E\x16\x1E\x50-\x57\xFC\xFD]+/gcs;  # Skip some register pushes, cld, std.
   # TODO(pts): Add skipping of (sub sp, ...) for local variables.
   return unpack("C", $1) if
