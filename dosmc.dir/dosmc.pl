@@ -1599,7 +1599,7 @@ sub detect_asm($) {
   while (<$f>) {
     s@\A\s+@@;
     if (m@\A(?:;|GLOBAL\s+|PUBLIC\s+|ORG\s+)@i) {  # Available in both "wasm" and "nasm".
-    } elsif (m@\A([.]|EXTRN\s+|\w+\s+(?:GROUP|SEGMENT|MACRO|=)\s+)@i) {
+    } elsif (m@\A([.]|EXTRN\s+|DOSSEG\s+|\w+\s+(?:GROUP|SEGMENT|MACRO|=)\s+)@i) {
       # wasm directives starting with .: .186 .286C .286P .287 .386P .387
       # .486P .586P .686P .8086 .8087 .ALPHA .BREAK .CODE .CONST .CONTINUE
       # .CREF .DATA? .DOSSEG .ELSE .ENDIF .ENDW .ERRB .ERRDEF .ERRDIFI
