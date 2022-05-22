@@ -1379,11 +1379,8 @@ sub print_and_link_executable($$$$$@) {
   link_executable($is_nasm, $exefn, $target2, $CPUF, @objfns);
 }
 
-my $is_first_arg = 1;
-
-if (@ARGV and $ARGV[0] eq "//link") {
+if ($ARGV[0] eq "//link") {
   # //link supports only a subset of the command-line flags.
-  $is_first_arg = 0;
   shift(@ARGV);
   for my $arg (@ARGV) {
     if ($arg eq "--" or $arg eq "-" or !length($arg)) {
@@ -1403,9 +1400,8 @@ if (@ARGV and $ARGV[0] eq "//link") {
     }
   }
   # Use the compiler frontend to do the linking.
-} elsif (@ARGV and $ARGV[0] eq "//ar") {
+} elsif ($ARGV[0] eq "//ar") {
   # //ar supports only a subset of the command-line flags.
-  $is_first_arg = 0;
   shift(@ARGV);
   for my $arg (@ARGV) {
     if ($arg eq "--" or $arg eq "-" or !length($arg)) {
@@ -1422,8 +1418,16 @@ if (@ARGV and $ARGV[0] eq "//link") {
   }
   unshift(@ARGV, "-cl");
   # Use the compiler frontend to do the linking.
-} elsif (@ARGV and $ARGV[0] !~ m@\A-@ and ($ARGV[0] =~ m@[.](?:p[lm]|sh|exe|elf)\Z(?!\n)@i or $ARGV[0] !~ m@[.][^./]+\Z(?!\n)@)) {
+} elsif ($ARGV[0] eq "//cc") {
+  # Use the compiler frontend to do these operations.
+  shift(@ARGV);
+} elsif ($ARGV[0] !~ m@\A-@ and ($ARGV[0] =~ m@[.](?:p[lm]|sh|exe|elf)\Z(?!\n)@i or $ARGV[0] !~ m@[.][^./]+\Z(?!\n)@)) {
   # TODO(pts): Port this to Win32.
+  fix_path();
+  run_subcommand_or_perl_script_or_dir(@ARGV); exit;
+} elsif ($ARGV[0] !~ m@\A-@ and -d($ARGV[0])) {
+  # To disable this (arbitrary Perl script execution by directory name),
+  # pass -q (or any other flag) as 1st arg.
   fix_path();
   run_subcommand_or_perl_script_or_dir(@ARGV); exit;
 }
@@ -1491,17 +1495,11 @@ for my $arg (@ARGV) {
     $do_add_libc = 0;
   } elsif ($arg =~ m@\A-@) {
     push @wcc_args, $arg;
-  } elsif ($is_first_arg and -d($arg)) {
-    # To disable this (arbitrary Perl script execution by directory name),
-    # pass -q (or any other flag) as 1st arg.
-    fix_path();
-    run_subcommand_or_perl_script_or_dir(@ARGV); exit;
   } elsif ($arg =~ m@[.](?:c|nasm|wasm|asm|obj|lib)\Z(?!\n)@) {
     push @sources, $arg;
   } else {
     die "$0: fatal: unknown file extension for source file (must be .c, .nasm, .wasm, .asm, .obj or .lib): $arg\n";
   }
-  $is_first_arg = 0;
 }
 
 die "$0: fatal: missing source file argument\n" if !@sources;
