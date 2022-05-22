@@ -213,9 +213,11 @@ sub emit_nasm_segment($$$$$$) {
     my $j = $_[0];
     while ($fi < @$fixupr and $fixupr->[$fi][1] < $j) {  # Apply fixup.
       my($endofs, $ofs, $ltypem, $symbol) = @{$fixupr->[$fi++]};
-      die "$0: assert: bad FIXUPP order in segment $segment_name\n" if $ofs <= $i;
+      die "$0: assert: bad FIXUPP order in segment $segment_name: $ofs vs $i\n" if $ofs < $i;
       die "$0: assert: LEDATA shorter than FIXUPP in segment $segment_name\n" if length($data) < $ofs;
-      my $line = unpack("H*", substr($data, $i, $ofs - $i)); $line =~ s@(..)(?=.)@$1, 0x@sg; print $exef "db 0x$line\n";
+      if ($i < $ofs) {
+        my $line = unpack("H*", substr($data, $i, $ofs - $i)); $line =~ s@(..)(?=.)@$1, 0x@sg; print $exef "db 0x$line\n";
+      }
       my $base = sprintf("0x%x", unpack("v", substr($data, $ofs, 2)));
       my $size = $endofs - $ofs;
       my $rel = $ltypem < 0 ? "-(\$+$size)" : "";
