@@ -1745,10 +1745,10 @@ sub compiler_frontend {
       $do_add_libc = 0;
     } elsif ($arg =~ m@\A-@) {
       push @wcc_args, $arg;
-    } elsif ($arg =~ m@[.](?:c|nasm|wasm|asm|obj|lib)\Z(?!\n)@) {
+    } elsif ($arg =~ m@[.](?:c|nasm|wasm|asm|obj|o|lib)\Z(?!\n)@) {  # .o is a legacy wcc alias of .obj.
       push @sources, $arg;
     } else {
-      die "$0: fatal: unknown file extension for source file (must be .c, .nasm, .wasm, .asm, .obj or .lib): $arg\n";
+      die "$0: fatal: unknown file extension for source file (must be .c, .nasm, .wasm, .asm, .obj, .o or .lib): $arg\n";
     }
   }
 
@@ -1756,7 +1756,7 @@ sub compiler_frontend {
   $target = $EXEOUT =~ m@[.]com\Z(?!\n)@i ? "com" : $EXEOUT =~ m@[.]bin\Z(?!\n)@i ? "bin" : "" if !length($target);
   $PL = "-c" if !length($PL) and $target eq "bin";
   if (!length($PL)) {
-    my %ext_to_pl = ("obj" => "-c", "com" => "-cd", "exe" => "-cd", "bin" => "-c", "lib" => "-cl", "wasm" => "-cw", "asm" => "-cw");
+    my %ext_to_pl = ("obj" => "-c", "o" => "-c", "com" => "-cd", "exe" => "-cd", "bin" => "-c", "lib" => "-cl", "wasm" => "-cw", "asm" => "-cw");
     my $exe_ext = $EXEOUT =~ m@[.]([^./]+)\Z(?!\n)@ ? lc($1) : "";
     $PL = exists($ext_to_pl{$exe_ext}) ? $ext_to_pl{$exe_ext} : "-cd";
   }
@@ -1872,7 +1872,7 @@ sub compiler_frontend {
     my $objbasefn = $srcfn;
     my $ext = $objbasefn =~ s@[.]([^./]+)\Z(?!\n)@@s ? lc($1) : "";  # TODO(pts): Port to Win32.
     push @objbasefns, $objbasefn;
-    if ($ext eq "obj" or $ext eq "lib") {
+    if ($ext eq "obj" or $ext eq "o" or $ext eq "lib") {
       die "$0: fatal: .$ext source incomplatible with -cl: $srcfn\n" if $PL eq "-cl" and $ext eq "lib";
       push @objfns, $srcfn; next
     }
@@ -2013,9 +2013,9 @@ sub dosmc {
         die "$0: fatal: unsupported target: $arg\n" if !defined($1);
       } elsif ($arg =~ m@\A-@) {
         die "$0: fatal: unsupported flag: $arg\n";
-      } elsif ($arg =~ m@[.](?:obj|lib)\Z(?!\n)@) {
+      } elsif ($arg =~ m@[.](?:obj|lib|o)\Z(?!\n)@) {
       } else {
-        die "$0: fatal: unknown file extension for source file (must be .obj or .lib): $arg\n";
+        die "$0: fatal: unknown file extension for source file (must be .obj, .o or .lib): $arg\n";
       }
     }
     compiler_frontend(@_);
@@ -2030,9 +2030,9 @@ sub dosmc {
       } elsif ($arg =~ m@\A-(?:fo|fe)=(.*)\Z(?!\n)@s) {
       } elsif ($arg =~ m@\A-@) {
         die "$0: fatal: unsupported flag: $arg\n";
-      } elsif ($arg =~ m@[.](?:obj)\Z(?!\n)@) {
+      } elsif ($arg =~ m@[.](?:obj|o)\Z(?!\n)@) {
       } else {
-        die "$0: fatal: unknown file extension for source file (must be .obj): $arg\n";
+        die "$0: fatal: unknown file extension for source file (must be .obj or .o): $arg\n";
       }
     }
     unshift(@_, "-cl");
