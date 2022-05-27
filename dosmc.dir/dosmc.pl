@@ -978,7 +978,7 @@ sub link_executable($$$$@) {
     # No need to disambiguate NASM symbols like code_end, because
     # wcc adds _ prefix or suffix to all symbols (including static ones).
     if ($is_exe) {
-      my $stack_size_expr = ($segment_sizes{STACK} or "65534-((auto_stack_aligned-bss_start)+(data_end-data_start)+((code_end-code_startseg)&15))");
+      my $stack_size_expr = ($segment_sizes{STACK} or "0x10000-((auto_stack_aligned-bss_start)+(data_end-data_start)+((code_end-code_startseg)&15))");
 # Based on https://github.com/pts/pts-nasm-fullprog/blob/master/fullprog_dosexe.inc.nasm
 $fullprog_code = q(
 section .text align=1 vstart=-0x10
@@ -1018,7 +1018,7 @@ auto_stack:  ; Autodetect stack size to fill data segment to 65535 bytes.
 resb ((auto_stack-bss_start)+(data_end-data_start)+(code_end-code_startseg))&1  ; Word-align stack, for speed.
 auto_stack_aligned:
 %define stack_size ($stack_size_expr)
-times (stack_size-10)>>256 resb 0  ; Assert that stack size is at least 10.
+times -(((stack_size-0x10)>>31)&1) resb 0  ; Assert that stack size is at least 0x10.
 stack: resb stack_size
 S\$STACK:
 bss_end:
@@ -1028,7 +1028,7 @@ minalloc_diff_is_nonnegative equ (~(minalloc_diff >> 31) & 1)
 times -(((bss_end-bss_start)+(data_end-data_start))>>16) db 0
 );
     } else {  # .com or .bin
-      my $stack_size_expr = ($segment_sizes{STACK} or "65535-3-((auto_stack_aligned-bss_start)+(data_end-data_start)+((code_end-code_start+0x100)&15))");
+      my $stack_size_expr = ($segment_sizes{STACK} or "0x10000-4-((auto_stack_aligned-bss_start)+(data_end-data_start)+(code_end-code_start+0x100))");
       my $text_vofs = $is_com ? 0x100 : $text_vofs_for_bin;
 # Based on https://github.com/pts/pts-nasm-fullprog/blob/master/fullprog_dosexe.inc.nasm
 $fullprog_code = qq(
@@ -1056,7 +1056,7 @@ auto_stack:  ; Autodetect stack size to fill main segment to almost 65535 bytes.
 resb ((auto_stack-bss_start)+(data_end-data_start)+(code_end-code_start+0x100))&1  ; Word-align stack, for speed.
 auto_stack_aligned:
 %define stack_size ($stack_size_expr)
-times (stack_size-10)>>256 resb 0  ; Assert that stack size is at least 10.
+times -(((stack_size-0x10)>>31)&1) resb 0  ; Assert that stack size is at least 0x10.
 ; This is fake, end of stack depends on DOS, typically sp==0xfffe or sp==0xfffc.
 stack: resb stack_size
 S\$STACK:
@@ -1193,10 +1193,9 @@ call__fullprog_end:  ; Make fullprog_code without fullprog_end fail.
       die "$0: fatal: code too large\n" if $after_text_vofs > 65535;  # !! Allow 65536, also in nasm.
       die "$0: fatal: code+data too large for .com\n" if !$is_exe and $after_text_vofs + $data_size + $segment_sizes{_BSS} > 65535;
       $stack_align_size = ($after_text_vofs + $data_size + $segment_sizes{_BSS}) & 1;
-      my $stack_size_auto = 65534 - ($data_size + $segment_sizes{_BSS} + ($is_exe ? 0 : 2 + $after_text_vofs) + $stack_align_size);
-      die "$0: assert: bad stack_size_auto\n"  if $is_exe and $data_size + $segment_sizes{_BSS} + $stack_align_size + $stack_size_auto != 65534;
+      my $stack_size_auto = 0x10000 - ($data_size + $segment_sizes{_BSS} + ($is_exe ? $after_text_vofs & 15 : 4 + $after_text_vofs) + $stack_align_size);
       $stack_size = ($segment_sizes{STACK} or $stack_size_auto);  # If STACK segment specified, use its size, otherwise fill stack to make DGROUP ~64 KiB long.
-      die "$0: fatal: stack too small (code and data too large)\n" if $stack_size < 10;
+      die "$0: fatal: data+stack too small (code and/or data may be too large)\n" if $stack_size < 0x10;  # Smaller values may also break, depending on the DOS version and interrupt stack depth.
     }
     my %segment_vofs;
     my $vofs = $vofs_base;
