@@ -993,7 +993,7 @@ dw minalloc_diff_is_nonnegative * ((minalloc_diff + 15) >> 4)  ; minalloc: parag
 dw 0xffff  ; maxalloc: paragraph count of maximum required memory.
 dw (code_end-code_startseg)>>4  ; Stack segment (ss) base, will be same as ds. Low 4 bits are in vstart= of .data.
 code_startseg:
-dw (bss_end-bss_start)+(data_end-data_start) ; Stack pointer (sp).
+dw ((code_end-code_startseg)&15)+(bss_end-bss_start)+(data_end-data_start) ; Stack pointer (sp).
 dw 0  ; No file checksum.
 dw code_start-code_startseg  ; Instruction pointer (ip): 8.
 dw 0  ; Code segment (cs) base.
@@ -1240,7 +1240,7 @@ call__fullprog_end:  ; Make fullprog_code without fullprog_end fail.
       my $minalloc = $nobits_size > $image_size_up ? (($nobits_size - $image_size_up + 15) >> 4) : 0;
       my $exe_header = pack("a2v11", "MZ", $image_size & 511, ($image_size + 511) >> 9, 0, 1,
           $minalloc, 0xffff,  # (minalloc, maxalloc).
-          $after_text_vofs >> 4, 0 * ($after_text_vofs & 15) + $data_size + $nobits_size,  # (ss, sp).  # TODO(pts): Fix bug by removing the `0 *'.
+          $after_text_vofs >> 4, ($after_text_vofs & 15) + $data_size + $nobits_size,  # (ss, sp).
           0,  # (checksum).
           8, 0);  # (ip, cs).
       print $exef $exe_header;
