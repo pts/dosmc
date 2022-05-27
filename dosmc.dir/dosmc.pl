@@ -1221,7 +1221,7 @@ call__fullprog_end:  ; Make fullprog_code without fullprog_end fail.
     }
     if ($is_exe) {
       my $image_size = 16 + $after_text_vofs + $data_size;  # TODO(pts): Add an option to align _DATA and _BSS to word bondary.
-      my $nobits_size = $segment_sizes{_BSS} + $stack_align_size + $stack_size;
+      my $nobits_size = $vofs_top - $data_size - $dgroup_vofs;
       # DOS (kvikdos, DOSBox 0.74-4, FreeDOS 1.2 and MS-DOS 6.22) reserves this many bytes: R ==
       #   == ($nblocks << 9) - ($hdrsize << 4) + ($minalloc << 4) ==
       #   == (($image_size + 511) >> 9 << 9) - 16 + ($minalloc << 4),
@@ -1239,7 +1239,7 @@ call__fullprog_end:  ; Make fullprog_code without fullprog_end fail.
       my $minalloc = $nobits_size > $image_size_up ? (($nobits_size - $image_size_up + 15) >> 4) : 0;
       my $exe_header = pack("a2v11", "MZ", $image_size & 511, ($image_size + 511) >> 9, 0, 1,
           $minalloc, 0xffff,  # (minalloc, maxalloc).
-          $after_text_vofs >> 4, ($after_text_vofs & 15) + $data_size + $nobits_size,  # (ss, sp).
+          $after_text_vofs >> 4, $vofs_top,  # (ss, sp).
           0,  # (checksum).
           8, 0);  # (ip, cs).
       print $exef $exe_header;
