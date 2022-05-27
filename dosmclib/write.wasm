@@ -1,0 +1,17 @@
+		public write_
+		extrn _small_code_:byte
+		.code
+
+; ssize_t write(int fd, const void *buf, size_t count);
+; Optimized for size. AX == fd, DX == buf, BX == count.
+write_:		push cx
+		xchg ax, bx		; AX := count; BX := fd.
+		xchg ax, cx		; CX := count; AX := junk.
+		mov ah, 40h
+		int 21h
+		jnc @$ok
+		sbb ax, ax		; AX := -1.
+@$ok:		pop cx
+		ret
+
+		end

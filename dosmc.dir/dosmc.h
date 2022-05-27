@@ -17,6 +17,7 @@ typedef char int8_t;
 typedef short int16_t;
 typedef long int32_t;
 typedef unsigned int size_t;  /* TODO(pts): 64-bit tcc. */
+typedef int ssize_t;  /* TODO(pts): 64-bit tcc. */
 
 /* Can be specified multiple times (and will be emitted once each for .c,
  * and deduplicate for .nasm). Works with or without trailing semicolon.
@@ -248,5 +249,7 @@ modify [ ah ];
 
 int remove(const char *pathname);
 int unlink(const char *pathname);  /* Same as remove(). */
+
+ssize_t write(int fd, const void *buf, size_t count);
 
 #endif  /* _DOSMC_H_ */
