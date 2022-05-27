@@ -989,8 +989,8 @@ dw ((code_end-exe_header)+(data_end-data_start))&511  ; Image size low 9 bits.
 dw ((code_end-exe_header)+(data_end-data_start)+511)>>9  ; Image size high bits, including header and relocations (none here), excluding .bss, rounded up.
 dw 0  ; Relocation count.
 dw 1  ; Paragraph (16 byte) count of header. Points to code_startseg.
-dw (bss_end-bss_start+15-(-((data_end-data_start)+(code_end-code_startseg))&15))>>4  ; Paragraph count of minimum required memory.
-dw 0xffff  ; Paragraph count of maximum required memory.
+dw minalloc_diff_is_nonnegative * ((minalloc_diff + 15) >> 4)  ; minalloc: paragraph count of minimum required memory.
+dw 0xffff  ; maxalloc: paragraph count of maximum required memory.
 dw (code_end-code_startseg)>>4  ; Stack segment (ss) base, will be same as ds. Low 4 bits are in vstart= of .data.
 code_startseg:
 dw (bss_end-bss_start)+(data_end-data_start) ; Stack pointer (sp).
@@ -1022,6 +1022,8 @@ times (stack_size-10)>>256 resb 0  ; Assert that stack size is at least 10.
 stack: resb stack_size
 S\$STACK:
 bss_end:
+minalloc_diff equ bss_end-bss_start - (-((data_end-data_start)+(code_end-exe_header))&511)
+minalloc_diff_is_nonnegative equ (~(minalloc_diff >> 31) & 1)
 ; Fails with `error: TIMES value -... is negative` if data is too large (>~64 KiB).
 times -(((bss_end-bss_start)+(data_end-data_start))>>16) db 0
 );
@@ -1183,6 +1185,7 @@ call__fullprog_end:  ; Make fullprog_code without fullprog_end fail.
     }
     my $vofs_base = ($is_exe ? 8 : $is_com ? 0x100 : $text_vofs_for_bin) + length($init_regs) + length($clear_bss);
     my $after_text_vofs = $vofs_base + length($call_main) + length($ledata{_TEXT});
+    die "$0: assert: _TEXT segment size mismatch\n" if length($ledata{_TEXT}) != $segment_sizes{_TEXT};
     my $data_size = $segment_sizes{CONST} + $segment_sizes{CONST2} + $segment_sizes{_DATA};
     my $stack_size = 0; my $stack_align_size = 0;
     if ($is_com or $is_exe) {
@@ -1199,12 +1202,15 @@ call__fullprog_end:  ; Make fullprog_code without fullprog_end fail.
     my $vofs = $vofs_base;
     $segment_vofs{call_main} = $vofs; $vofs += length($call_main);  # For the relocation below.
     $segment_vofs{_TEXT} = $vofs; $vofs += length($ledata{_TEXT});
+    die "$0: assert: after_text_vofs mismatch\n" if $vofs != $after_text_vofs;
     $vofs &= 15 if $is_exe;
     my $dgroup_vofs = $segment_vofs{CONST} = $vofs; $vofs += length($ledata{CONST});  # String literals in CONST.
     $segment_vofs{CONST2} = $vofs; $vofs += length($ledata{CONST2});
     $segment_vofs{_DATA} = $vofs; $vofs += length($ledata{_DATA});
     $segment_vofs{_BSS} = $vofs; $vofs += $segment_sizes{_BSS};
-    $segment_vofs{STACK} = $vofs + $stack_align_size + $stack_size; $vofs = undef;
+    $segment_vofs{STACK} = $vofs + $stack_align_size + $stack_size; $vofs += $stack_align_size + $stack_size;
+    my $vofs_top = $vofs;  $vofs = undef;
+    die "$0: assert vofs_top mismatch\n" if $vofs_top != ($is_exe ? $after_text_vofs & 15 : $after_text_vofs) + $data_size + $segment_sizes{_BSS} + $stack_align_size + $stack_size;
     my %symbol_vofs;  # $symbol => $segment_vofs + $obj_ofs.
     for my $segment_name (keys %segment_symbols) {
       my $this_segment_vofs = $segment_vofs{$segment_name};
@@ -1215,10 +1221,28 @@ call__fullprog_end:  ; Make fullprog_code without fullprog_end fail.
       }
     }
     if ($is_exe) {
-      my $image_size = 24 + length($init_regs) + length($clear_bss) + length($call_main) + $segment_sizes{_TEXT} + $data_size;
+      my $image_size = 16 + $after_text_vofs + $data_size;  # TODO(pts): Add an option to align _DATA and _BSS to word bondary.
+      my $nobits_size = $segment_sizes{_BSS} + $stack_align_size + $stack_size;
+      # DOS (kvikdos, DOSBox 0.74-4, FreeDOS 1.2 and MS-DOS 6.22) reserves this many bytes: R ==
+      #   == ($nblocks << 9) - ($hdrsize << 4) + ($minalloc << 4) ==
+      #   == (($image_size + 511) >> 9 << 9) - 16 + ($minalloc << 4),
+      #   because $nblocks is ($image_size + 511) >> 9 and $hdrsize is 1.
+      # We need this many bytes: N ==
+      #   == $after_text_vofs + $data_size + $segment_sizes{_BSS} + $stack_align_size + $stack_size ==
+      #   == $image_size - 16 + $nobits_size.
+      # To make it fit, we must have R >= N:
+      #   (($image_size + 511) >> 9 << 9) - 16 + ($minalloc << 4) >= $image_size - 16 + $nobits_size.
+      #   ($minalloc << 4) >= ($image_size - (($image_size + 511) >> 9 << 9)) + $nobits_size.
+      #   ($minalloc << 4) >= ($image_size - $image_size - (-$image_size & 511)) + $nobits_size.
+      #   ($minalloc << 4) >= $nobits_size - (-$image_size & 511).
+      #   $minalloc >= (($nobits_size - (-$image_size & 511) + 15) >> 4).
+      my $image_size_up = -$image_size & 511;
+      my $minalloc = $nobits_size > $image_size_up ? (($nobits_size - $image_size_up + 15) >> 4) : 0;
       my $exe_header = pack("a2v11", "MZ", $image_size & 511, ($image_size + 511) >> 9, 0, 1,
-          ($segment_sizes{_BSS} + $stack_align_size + $stack_size + 15-(-($data_size + $after_text_vofs) & 15)) >> 4,
-          0xffff, $after_text_vofs >> 4, $data_size + $segment_sizes{_BSS} + $stack_align_size + $stack_size, 0, 8, 0);
+          $minalloc, 0xffff,  # (minalloc, maxalloc).
+          $after_text_vofs >> 4, 0 * ($after_text_vofs & 15) + $data_size + $nobits_size,  # (ss, sp).  # TODO(pts): Fix bug by removing the `0 *'.
+          0,  # (checksum).
+          8, 0);  # (ip, cs).
       print $exef $exe_header;
     }
     substr($clear_bss, 1 + ($is_exe ? 2 : 0) + (($is_exe and $lf{start_es_psp}) ? 1 : 0), 2) = pack("v", $segment_vofs{_BSS}) if length($clear_bss) >= 6;
