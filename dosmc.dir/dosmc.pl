@@ -742,8 +742,8 @@ shr ax, 1  ; Set ax to argc, it's final return value.
 };
 
 sub link_executable($$$$@) {
-  my($is_nasm, $exefn, $target, $CPUF) = splice(@_, 0, 4);  # Keep .obj files in @_.
-  local $0 = "dosmc-linker-$target" . ($is_nasm ? "-nasm" : "");
+  my($link_mode, $exefn, $target, $CPUF) = splice(@_, 0, 4);  # Keep .obj files in @_.
+  local $0 = "dosmc-linker-$target" . ($link_mode == 2 ? "-justload" : $link_mode ? "-nasm" : "");
   die "$0: assert: unknown target: $target\n" if $target ne "exe" and $target ne "com" and $target ne "bin";
   my $is_exe = $target eq "exe";
   my $is_com = $target eq "com";
@@ -893,7 +893,7 @@ sub link_executable($$$$@) {
     die "$0: fatal: duplicate symbols: @lu\n";
   }
 
-  if ($is_com or $is_exe) {
+  if (($is_com or $is_exe) and $link_mode != 2) {
     my $entry_count = (defined($text_symbol_ofs{"G\$main_"}) + defined($text_symbol_ofs{"G\$_start_"}));
     die "$0: fatal: too many entry points (main functions)\n" if $entry_count > 1;
     die "$0: fatal: missing entry point (main function)\n" if $entry_count == 0;
@@ -960,7 +960,7 @@ sub link_executable($$$$@) {
   }
 
   my $entry_point_mode = !($is_com or $is_exe) ? 4 : defined($text_symbol_ofs{"G\$_start_"}) ? 1 : (defined($text_symbol_ofs{"G\$main_"}) and $do_use_argc) ? 2 : defined($text_symbol_ofs{"G\$main_"}) ? 3 : 0;
-  die "$0: assert: bad entry_point_mode\n" if !$entry_point_mode;  # We've checked $entry_count above already.
+  die "$0: assert: bad entry_point_mode\n" if !$entry_point_mode and $link_mode != 2;  # We've checked $entry_count above already.
 
   my $does_entry_point_return = !defined($exit_code);  # TODO(pts): Smarter detection.
   my $is_data_used = !defined($exit_code);
@@ -978,11 +978,12 @@ sub link_executable($$$$@) {
     die "$0: assert: output segment size mismatch for $segment_name\n" if length($ledata{$segment_name}) != $size;
   }
 
+  return if $link_mode == 2;
   my $exef;  # May be of .com, .exe or .nasm format.
   eval {
   die "$0: fatal: cannot open for writing: $exefn\n" if !open($exef, ">", $exefn);
   binmode($exef);
-  if ($is_nasm) {  # emit_nasm.
+  if ($link_mode) {  # emit_nasm.
     my($fullprog_code, $fullprog_data, $fullprog_bss, $fullprog_end);
     # No need to disambiguate NASM symbols like code_end, because
     # wcc adds _ prefix or suffix to all symbols (including static ones).
@@ -1284,7 +1285,7 @@ call__fullprog_end:  ; Make fullprog_code without fullprog_end fail.
   }
   };  # End of eval block.
   close($exef) if $exef;
-  if ($@) { print STDERR $@; exit(4 + $is_nasm); }
+  if ($@) { print STDERR $@; exit(4 + $link_mode); }
 }
 
 # --- End of linker, main code continues.
@@ -1710,9 +1711,9 @@ segment %1
 );  #`
 
 sub print_and_link_executable($$$$$@) {
-  my($is_nasm, $exefn, $target2, $CPUF, $Q, @objfns) = @_;
-  print_command("//link", "-bt=$target2", $CPUF, ($is_nasm ? "-cn" : "-ce"),  "-fe=$exefn", @objfns) if !length($Q);
-  link_executable($is_nasm, $exefn, $target2, $CPUF, @objfns);
+  my($link_mode, $exefn, $target2, $CPUF, $Q, @objfns) = @_;
+  print_command("//link", "-bt=$target2", $CPUF, ($link_mode == 2 ? "-cldl" : $link_mode ? "-cn" : "-ce"),  "-fe=$exefn", @objfns) if !length($Q);
+  link_executable($link_mode, $exefn, $target2, $CPUF, @objfns);
 }
 
 sub compiler_frontend {
@@ -1725,7 +1726,7 @@ sub compiler_frontend {
   my @wcc_args;
   my @defines;
   my $do_add_libc = 1;
-  my $do_link_with_nasm = 0;
+  my $link_mode = 0;
 
   for my $arg (@_) {
     if ($arg eq "--" or $arg eq "-" or !length($arg)) {
@@ -1739,14 +1740,16 @@ sub compiler_frontend {
              $arg eq "-cl" or  # Compile and build static library (.lib) from the .obj files.
              $arg eq "-cw" or  # Compile to .wasm files, don't link (no wcc, no wcl). .wasm output can be used next time instead of .obj (-c), except that !! the entry point is omitted (i.e. wdis emits `END' instead of `END ...').
              0) {
-      if ($arg eq "-ce" ) { $arg = "-cd"; $do_link_with_nasm = 0; }
-      elsif ($arg eq "-cn") { $arg = "-cd"; $do_link_with_nasm = 1; }
+      if ($arg eq "-ce" ) { $arg = "-cd"; $link_mode = 0; }
+      elsif ($arg eq "-cn") { $arg = "-cd"; $link_mode = 1; }
       die "$0: fatal: conflicting output modes: $PL vs $arg\n" if length($PL) and $PL ne $arg;
       $PL = $arg;
     } elsif ($arg eq "-cldn") {  # Link with nasm. No such flag in wcc or wcl.
-      $do_link_with_nasm = 1;
+      $link_mode = 1;
     } elsif ($arg eq "-cldi") {  # Link with internal linker. No such flag in wcc or wcl.
-      $do_link_with_nasm = 0;
+      $link_mode = 0;
+    } elsif ($arg eq "-cldl") {  # Just load all .obj and .lib files, do not link.
+      $link_mode = 2;
     } elsif ($arg eq "-q") {
       $Q = $arg;  # Quiet. Default.
     } elsif ($arg eq "-nq") {  # No such flag in wcc or wcl.
@@ -1784,7 +1787,7 @@ sub compiler_frontend {
     }
   }
 
-  die "$0: fatal: missing source file argument\n" if !@sources;
+  die "$0: fatal: missing source file argument\n" if !@sources and !((!length($PL) or $PL eq "-cd") and $link_mode == 2);
   $target = $EXEOUT =~ m@[.]com\Z(?!\n)@i ? "com" : $EXEOUT =~ m@[.]bin\Z(?!\n)@i ? "bin" : "" if !length($target);
   $PL = "-c" if !length($PL) and $target eq "bin";
   if (!length($PL)) {
@@ -1798,7 +1801,7 @@ sub compiler_frontend {
     if ($PL eq "-pl" or $PL eq "-zs") {
       $EXEOUT = "-";
     } elsif ($PL eq "-cd" or $PL eq "-cl") {
-      my $in1base = $sources[0]; $in1base =~ s@[.][^./]+\Z(?!\n)@@s;  # TODO(pts): Port to Win32.
+      my $in1base = @sources ? $sources[0] : "nul"; $in1base =~ s@[.][^./]+\Z(?!\n)@@s;  # TODO(pts): Port to Win32.
       $EXEOUT = "$in1base." . (($PL eq "-cl") ? "lib" : length($target) ? $target : "exe");
     }
   }
@@ -1962,11 +1965,12 @@ sub compiler_frontend {
       }
       splice @wasm_cmd, $wasm_cmd_size;
       if ($is_bin and !$is_wasm_error) {
-        my $exefn = $do_link_with_nasm ? "$objbasefn.tmp.nasm" : $objfn;
+        my $link_mode2 = $link_mode == 1 ? 1 : 0;
+        my $exefn = $link_mode2 ? "$objbasefn.tmp.nasm" : $objfn;
         my $target2 = "bin";
         my @objfns = ($binobjfn);
-        print_and_link_executable($do_link_with_nasm, $exefn, $target2, $CPUF, $Q, @objfns);
-        if ($do_link_with_nasm and run_command($Q, "nasm", "-O0", "-f", "bin", "-o", $objfn, $exefn)) {
+        print_and_link_executable($link_mode2, $exefn, $target2, $CPUF, $Q, @objfns);
+        if ($link_mode2 and run_command($Q, "nasm", "-O0", "-f", "bin", "-o", $objfn, $exefn)) {
           print STDERR "$0: fatal: nasm failed\n"; ++$errc;
         }
       }
@@ -1992,17 +1996,17 @@ sub compiler_frontend {
 
   if ($is_bin) {  # nasm has already finished.
   } elsif ($PL eq "-cd") {
-    if ($do_add_libc and @objfns) {
+    if ($do_add_libc and (@objfns or $link_mode == 2)) {
       push @objfns, "$MYDIR/dosmc.lib";
       pop @objfns if !-f($objfns[-1]);
     }
-    my $in1base = $sources[0]; $in1base =~ s@[.][^./]+\Z(?!\n)@@s;  # TODO(pts): Port to Win32.
-    my $exefn = $do_link_with_nasm ? "$in1base.tmp.nasm" : $EXEOUT;
+    my $in1base = @sources ? $sources[0] : "nul"; $in1base =~ s@[.][^./]+\Z(?!\n)@@s;  # TODO(pts): Port to Win32.
+    my $exefn = $link_mode == 1 ? "$in1base.tmp.nasm" : $EXEOUT;
     my $target2 = length($target) ? $target : "exe";
-    print_and_link_executable($do_link_with_nasm, $exefn, $target2, $CPUF, $Q, @objfns);
+    print_and_link_executable($link_mode, $exefn, $target2, $CPUF, $Q, @objfns);
     # .nasm output ($EXEFN) cannot be used to produce an .obj file again (i.e. nasm -f obj).
     # TODO(pts): Add support for this, preferably autodetection.
-    if ($do_link_with_nasm and run_command($Q, "nasm", "-O0", "-f", "bin", "-o", $EXEOUT, $exefn)) {
+    if ($link_mode == 1 and run_command($Q, "nasm", "-O0", "-f", "bin", "-o", $EXEOUT, $exefn)) {
       print STDERR "$0: fatal: nasm failed\n"; exit(6);
     }
   } elsif ($PL eq "-cl") {
@@ -2036,7 +2040,7 @@ sub dosmc {
     for my $arg (@_) {
       if ($arg eq "--" or $arg eq "-" or !length($arg)) {
         die "$0: fatal: unsupported argument: $arg\n";
-      } elsif ($arg eq "-ce" or $arg eq "-cn" or $arg eq "-cldi" or $arg eq "-cldn") {
+      } elsif ($arg eq "-ce" or $arg eq "-cn" or $arg eq "-cldi" or $arg eq "-cldn" or $arg eq "-cldl") {
       } elsif ($arg eq "-q" or $arg eq "-nq") {
       } elsif ($arg eq "-mt" or $arg eq "-mb") {
       } elsif ($arg =~ m@\A-(?:fo|fe)=(.*)\Z(?!\n)@s) {
