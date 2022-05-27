@@ -1,0 +1,86 @@
+		public __U4D
+		extrn _small_code_:byte
+		.code
+
+; Implements `(unsigned long a) / (unsigned long b)' and also computes the
+; modulo (%).
+;
+; Implementation copied from
+; open-watcom-2_0-c-linux-x86-2022-05-01/lib286/dos/clibs.lib:i4d.o
+;
+__U4D:		or cx,cx
+		jne @$5
+		dec bx
+		je @$4
+		inc bx
+		cmp bx,dx
+		ja @$3
+		mov cx,ax
+		mov ax,dx
+		sub dx,dx
+		div bx
+		xchg ax,cx
+@$3:		div bx
+		mov bx,dx
+		mov dx,cx
+		sub cx,cx
+@$4:		ret
+@$5:		cmp cx,dx
+		jb @$7
+		jne @$6
+		cmp bx,ax
+		ja @$6
+		sub ax,bx
+		mov bx,ax
+		sub cx,cx
+		sub dx,dx
+		mov ax,1
+		ret
+@$6:		sub cx,cx
+		sub bx,bx
+		xchg ax,bx
+		xchg dx,cx
+		ret
+@$7:		push bp
+		push si
+		sub si,si
+		mov bp,si
+@$8:		add bx,bx
+		adc cx,cx
+		jb @$11
+		inc bp
+		cmp cx,dx
+		jb @$8
+		ja @$9
+		cmp bx,ax
+		jbe @$8
+@$9:		clc
+@$10:		adc si,si
+		dec bp
+		js @$14
+@$11:		rcr cx,1
+		rcr bx,1
+		sub ax,bx
+		sbb dx,cx
+		cmc
+		jb @$10
+@$12:		add si,si
+		dec bp
+		js @$13
+		shr cx,1
+		rcr bx,1
+		add ax,bx
+		adc dx,cx
+		jae @$12
+		jmp @$10
+@$13:		add ax,bx
+		adc dx,cx
+@$14:		mov bx,ax
+		mov cx,dx
+		mov ax,si
+		xor dx,dx
+		pop si
+		pop bp
+		ret
+
+		end

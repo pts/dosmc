@@ -1,0 +1,47 @@
+		public __I4D
+		extrn _small_code_:byte
+		extrn __U4D:near
+		.code
+
+; Implements `(long a) / (long b)' and also computes the
+; modulo (%).
+;
+; Implementation copied from
+; open-watcom-2_0-c-linux-x86-2022-05-01/lib286/dos/clibs.lib:i4d.o
+;
+__I4D:		or dx,dx
+		js @$1
+		or cx,cx
+		js @$0
+		jmp __U4D
+@$0:		neg cx
+		neg bx
+		sbb cx,0
+		call __U4D
+		neg dx
+		neg ax
+		sbb dx,0
+		ret
+@$1:		neg dx
+		neg ax
+		sbb dx,0
+		or cx,cx
+		jns @$2
+		neg cx
+		neg bx
+		sbb cx,0
+		call __U4D
+		neg cx
+		neg bx
+		sbb cx,0
+		ret
+@$2:		call __U4D
+		neg cx
+		neg bx
+		sbb cx,0
+		neg dx
+		neg ax
+		sbb dx,0
+		ret
+
+		end

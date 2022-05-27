@@ -1,0 +1,27 @@
+		public __U4M
+		public __I4M
+		.code
+
+; Implements `(unsigned long a) * (unsigned long b)' and `(long)a * (long b)'.
+;
+; Implementation copied from
+; open-watcom-2_0-c-linux-x86-2022-05-01/lib286/dos/clibs.lib:i4m.o
+;
+__U4M:
+__I4M:		xchg ax,bx
+		push ax
+		xchg ax,dx
+		or ax,ax
+		je @$1
+		mul dx
+@$1:		xchg ax,cx
+		or ax,ax
+		je @$2
+		mul bx
+		add cx,ax
+@$2:		pop ax
+		mul bx
+		add dx,cx
+		ret
+
+		end
