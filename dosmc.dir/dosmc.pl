@@ -484,60 +484,69 @@ sub load_obj($$;$) {
         die "$0: fatal: FIXUPP data record offset too large in segment $last_segment_name: got=$endofs max=$size_limit\n" if
             $endofs > $size_limit;
         my $frame = ($fd >> 4) & 7;
-        my $target = $fd & 7;
+        my $has_target_displacement = (~$fd >> 2) & 1;
+        my $target = $fd & 3;
         my $fixuppr = $fixupp{$last_segment_name};
         die "$0: fatal: FIXUPP must not overlap\n" if @$fixuppr and $fixuppr->[-1][0] > $ofs;
         my $symbol;
         die "$0: fatal: unsupported FIXUPP location type: ltype=$ltype\n" if !defined($lsize);
-        if (($ltype == 1 and $frame == 5 and $target == 6) or
-            ($ltype == 2 and $frame == 5 and ($target == 4 or $target == 5))) {
+        if ($ltype == 2 and $frame == 5 and ($target == 0 or $target == 1)) {
           die "$0: fatal: EOF in FIXUPP target\n" if $i >= $size;
           die "$0: fatal: base FIXUPP outside segment _TEXT\n" if $ltype == 2 and $last_segment_name ne "_TEXT";
-          my $itype = $target == 4 ? "SEGDEF" : $target == 5 ? "GRPDEF" : "EXTDEF";
+          my $itype = $target == 0 ? "SEGDEF" : $target == 1 ? "GRPDEF" : "EXTDEF";
           my $idx = vec($data, $i++, 8);
           if ($idx >= 0x80) {
             die "$0: fatal: EOF in FIXUPP target 2-byte $itype index\n" if $i >= $size;
             $idx = ($idx - 0x80) << 8 | vec($data, $i++, 8);
           }
           die "$0: fatal: FIXUPP $itype index is 0\n" if $idx == 0;
-          if ($target == 4) {
+          if ($target == 0) {
             die "$0: fatal: unknown FIXUPP $itype index: $idx\n" if $idx >= @segment_names;
             # SB$CONST is the segment register value,
             # S$CONST is the byte offset of CONST within DGROUP.
             $symbol = "SB\$$segment_names[$idx]";
-          } elsif ($target == 5) {
+          } elsif ($target == 1) {
             $symbol = "SB\$$SEGMENT_ORDER[1]";  # First segment in DGROUP, right after _TEXT.  # TODO(pts): Why ignore $idx?
           } else {
             die "$0: fatal: unknown FIXUPP $itype index: $idx\n" if $idx >= @extdef;
             $symbol = $extdef[$idx];
           }
           #print STDERR "info: FIXUPP 16-bit $is_self \@$ofs EXTDEF $symbol\n";
-        } elsif ($ltype == 1 and ($target == 0 or $target == 4) and (
-                  $frame == 1 or  # Segment CONST in DGROUP, by wcc, with $target == 4.
-                  $frame == 5 or  # Segment CONST, by nasm, with $target == 4.
-                  $frame == 0)) {  # Segment CONST and _BSS, by MASM 4.00, with $target == 4 and $target == 0.
+        } elsif ($ltype == 1 and ($target == 0 or $target == 2) and (
+                  $frame == 1 or  # Segment CONST in DGROUP, by wcc, with $target == 0.
+                  $frame == 5 or  # Segment CONST, by nasm, with $target == 0.
+                  $frame == 0)) {  # Segment CONST and _BSS, by MASM 4.00, with $target == 0 (and both values of $has_target_diplacement).
           # We usually get it for string literals in CONST.
           die "$0: fatal: EOF in FIXUPP target\n" if $i + ($frame == 5 ? 1 : 2) > $size;
           ++$i if $frame == 1;  # Skip group index.
-          my $segment_idx = vec($data, $i++, 8);
-          die "$0: fatal: segment index mismatch in FIXUPP\n" if
-              $frame == 0 and $segment_idx != vec($data, $i++, 8);  # Skip duplicate segment index.
-          die "$0: fatal: unknown segment: $segment_idx\n" if !$segment_idx or $segment_idx >= @segment_names;
-          my $segment_name = $segment_names[$segment_idx];
-          #print STDERR "info: FIXUPP 16-bit is_self=$is_self \@$ofs SEGMENT $segment_name\n";
-          $symbol = "OS\$${segment_name}";
-          die "$0: fatal: stack FIXUPP outside segment _TEXT\n" if
-              $segment_name eq "STACK" and $last_segment_name ne "_TEXT";
-          if ($target == 0) {  # 2-byte or 4-byte target displacement.
+          if ($target == 0) {
+            my $segment_idx = vec($data, $i++, 8);
+            die "$0: fatal: segment index mismatch in FIXUPP\n" if
+                $frame == 0 and $segment_idx != vec($data, $i++, 8);  # Skip duplicate segment index.
+            die "$0: fatal: unknown segment: $segment_idx\n" if !$segment_idx or $segment_idx >= @segment_names;
+            my $segment_name = $segment_names[$segment_idx];
+            die "$0: fatal: stack FIXUPP outside segment _TEXT\n" if
+                $segment_name eq "STACK" and $last_segment_name ne "_TEXT";
+            #print STDERR "info: FIXUPP 16-bit is_self=$is_self \@$ofs SEGMENT $segment_name\n";
+            $symbol = "OS\$${segment_name}";
+          } elsif ($target == 2) {
+            # ltype=1 frame=1 target=2 td=0 self=0 ofs=10 size=2
+            my $extdef_idx = vec($data, $i++, 8);
+            die "$0: fatal: extdef_idx too large: $extdef_idx vs @extdef\n" if $extdef_idx > @extdef;
+            ++$i if $frame == 0;  # Skip segment index.
+            $symbol = $extdef[$extdef_idx];
+          }
+          if ($has_target_displacement) {
             my $dsize = ($type == 0x9c) ? 2 : 4;
-            my $pack_pattern = ($dsize == 2)  ? "v" : "V";
             die "$0: fatal: EOF in FIXUPP displacement\n" if $i + $dsize > $size;
-            my $dofs = unpack($pack_pattern, substr($data, $i, $dsize));
+            my $dofs = unpack(($dsize == 2)  ? "v" : "V", substr($data, $i, $dsize));
             $i += $dsize;
-            substr($ledata{$last_segment_name}, $ofs, $dsize) = pack($pack_pattern, unpack($pack_pattern, substr($ledata{$last_segment_name}, $ofs, $dsize)) + $dofs) if $dofs;
+            my $pack_pattern = ($lsize == 2)  ? "v" : "V";
+            # TODO(pts): Do we do it correctly when $dsize and $lsize are different?
+            substr($ledata{$last_segment_name}, $ofs, $lsize) = pack($pack_pattern, unpack($pack_pattern, substr($ledata{$last_segment_name}, $ofs, $lsize)) + $dofs) if $dofs;
           }
         } else {
-          die "$0: fatal: unsupported FIXUPP: ltype=$ltype frame=$frame target=$target endofs=$endofs ofs=$ofs\n";
+          die "$0: fatal: unsupported FIXUPP: ltype=$ltype frame=$frame target=$target td=$has_target_displacement self=$is_self ofs=$ofs size=$lsize\n";
         }
         if (!(ref($text_vofs_ref) and $symbol eq "OS\$_TEXT" and ($ltypem == 1 or $ltypem == 5 or $ltypem == 9))) {
           #print STDERR "info: add FIXUPP: segment=$last_segment_name endofs=$endofs ofs=$ofs ltypem=$ltypem symbol=$symbol\n";
