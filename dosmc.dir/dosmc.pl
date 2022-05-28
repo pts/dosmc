@@ -960,9 +960,32 @@ sub link_executable($$$$@) {
       for my $fixup (@$fixupr) {
         my($endofs, $ofs, $ltypem, $symbol) = @$fixup;
         substr($$datar, $ofs, $endofs - $ofs) = "\0" x ($endofs - $ofs) if $symbol eq "S\$STACK" and $ltypem == 1;  # Always 1, it's offset. Set displacement to 0.
-        # Proper support would require relocations to be added to the .exe header.
-        die "$0: fatal: general segment-base fixup unsupported: $1\n" if $symbol =~ m@\ASB\$(.*)@s;
       }
+    }
+  }
+
+  for my $segment_name (qw(STACK _BSS)) {
+    die "$0: fatal: fixup in uninitialized segment $segment_name is not allowed\n" if
+        @{$fixupp{$segment_name}};
+  }
+  for my $segment_name (@SEGMENT_ORDER) {
+    my $size = length($ledata{$segment_name});
+    for my $fixup (@{$fixupp{$segment_name}}) {  # Apply fixups.
+      my($endofs, $ofs, $ltypem, $symbol) = @$fixup;
+      my $ltype = abs($ltypem);
+      my $lsize = $endofs - $ofs;
+      if ($ltype != 1 or $endofs > $size or $ofs < 0 or ($lsize != 2 and $lsize != 4)) {
+        # Proper support of segment-base fixups would require relocations to be added to the .exe header.
+        my $msg = ($ltype == 2) ? "general segment-base fixup unsupported"
+                : ($ltype != 1) ? "unsupported fixup type"
+                : ($endofs > $size) ? "fixup too late"
+                : ($ofs < 0) ? "fixup too early"
+                : ($lsize != 2 and $lsize != 4) ? "unsupported fixup size"
+                : "assert: bad fixup error";
+        my $is_self = $ltypem < 0;
+        die "$0: fatal: $msg: type=$ltype self=$is_self symbol=$symbol at=$segment_name+$ofs size=$lsize\n";
+      }
+      # No need to check the existence of $symbol, we've done it already.
     }
   }
 
