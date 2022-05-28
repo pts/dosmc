@@ -927,19 +927,20 @@ sub link_executable($$$$@) {
       my $fixupr = $fixupp{_TEXT};
       pos($$datar) = $i;
       my $kind = 0;
+      my $sb_first = "SB\$$SEGMENT_ORDER[1]";
       if (($$datar =~ m@\G\xB8[\0\1]\0\x8E\xD8\xB8[\0\1]\0\x8E\xD0\xBC..@smg and @$fixupr >= 3 and  # mov ax, ?;; mov ds, ax;; mov ax, ?;; mov ss, ax;; mov sp, ?
-           $fixupr->[0][1] == 1 and $fixupr->[0][2] == 2 and exists($sb_symbols{$fixupr->[0][3]}) and
-           $fixupr->[1][1] == 6 and $fixupr->[1][2] == 2 and exists($sb_symbols{$fixupr->[1][3]}) and
+           $fixupr->[0][1] == 1 and $fixupr->[0][2] == 2 and $fixupr->[0][3] eq $sb_first and
+           $fixupr->[1][1] == 6 and $fixupr->[1][2] == 2 and $fixupr->[1][3] eq $sb_first and
            $fixupr->[2][1] == 11 and $fixupr->[2][2] == 1 and $fixupr->[2][3] eq "S\$STACK" and ($kind = 1)) or
           ($$datar =~ m@\G\xB8[\0\1]\0\x8E\xD0\xBC..\xB8[\0\1]\0\x8E\xD8@smg and @$fixupr >= 3 and  # mov ax, ?;; mov ss, ax;; mov sp, ?;; mov ax, ?;; mov ds, ax
-           $fixupr->[0][1] == 1 and $fixupr->[0][2] == 2 and exists($sb_symbols{$fixupr->[0][3]}) and
-           $fixupr->[2][1] == 9 and $fixupr->[2][2] == 2 and exists($sb_symbols{$fixupr->[2][3]}) and
+           $fixupr->[0][1] == 1 and $fixupr->[0][2] == 2 and $fixupr->[0][3] eq $sb_first and
+           $fixupr->[2][1] == 9 and $fixupr->[2][2] == 2 and $fixupr->[2][3] eq $sb_first and
            $fixupr->[1][1] == 6 and $fixupr->[1][2] == 1 and $fixupr->[1][3] eq "S\$STACK" and ($kind = 2)) or
           ($$datar =~ m@\G\xB8[\0\1]\0\x8E\xD8\x8E\xD0\xBC..@smg and @$fixupr >= 2 and  # mov ax, ?;; mov ds, ax;; mov ss, ax;; mov sp, ?
-           $fixupr->[0][1] == 1 and $fixupr->[0][2] == 2 and exists($sb_symbols{$fixupr->[0][3]}) and
+           $fixupr->[0][1] == 1 and $fixupr->[0][2] == 2 and $fixupr->[0][3] eq $sb_first and
            $fixupr->[1][1] == 8 and $fixupr->[1][2] == 1 and $fixupr->[1][3] eq "S\$STACK" and ($kind = 3)) or
           ($$datar =~ m@\G\xB8[\0\1]\0\x8E\xD0\xBC..\x8E\xD8@smg and @$fixupr >= 2 and  # mov ax, ?;; mov ss, ax;; mov sp, ?;; mov ds, ax
-           $fixupr->[0][1] == 1 and $fixupr->[0][2] == 2 and exists($sb_symbols{$fixupr->[0][3]}) and
+           $fixupr->[0][1] == 1 and $fixupr->[0][2] == 2 and $fixupr->[0][3] eq $sb_first and
            $fixupr->[1][1] == 6 and $fixupr->[1][2] == 1 and $fixupr->[1][3] eq "S\$STACK" and ($kind = 4))) {
         # Process segment-base fixups in startup code which sets up ax, ds, ss, sp.
         # We change `mov ax, 0' with SB\$$SEGMENT_ORDER[1] fixup to `mov ax, ss;; nop'.
@@ -959,7 +960,7 @@ sub link_executable($$$$@) {
         $fixupr->[$kind > 2 ? 1 : 2][3] = "S\$TOP";  # Change from S\$STACK.
         splice @$fixupr, 0, ($kind > 2 ?  1 : 2);  # Remove 1..2 fixups, keep the S\$TOP fixup.
       } elsif ($$datar =~ m@\G([\xBA\xB8])..@smg and @$fixupr >= 1 and  # mov dx|ax, ?;; then typically mov ds, dx|ax (\x8E\xDA). Generated for DX by TASM ideal mode startupcode.
-               $fixupr->[0][1] == 1 and $fixupr->[0][0] == 3 and $fixupr->[0][2] == 2 and exists($sb_symbols{$fixupr->[0][3]})) {
+               $fixupr->[0][1] == 1 and $fixupr->[0][0] == 3 and $fixupr->[0][2] == 2 and $fixupr->[0][3] eq $sb_first) {
         my $size = pos($$datar) - $i;
         substr($$datar, $i, 3) = pack("CCC", 0x8c, 0xd0 - 0xb8 + unpack("C", $1), 0x90);  # mov dx, ss;; nop.
         splice @$fixupr, 0, 1;
