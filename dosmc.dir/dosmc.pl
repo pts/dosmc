@@ -927,39 +927,42 @@ sub link_executable($$$$@) {
       my $fixupr = $fixupp{_TEXT};
       pos($$datar) = $i;
       my $kind = 0;
-      # !!! Add the original values (..), or at least check that they are 0 (\0\0).
-      if (($$datar =~ m@\G\xB8..\x8E\xD8\xB8..\x8E\xD0\xBC..@smg and @$fixupr >= 3 and  # mov ax, ?;; mov ds, ax;; mov ax, ?;; mov ss, ax;; mov sp, ?
-           $fixupr->[0][1] == 1 and exists($sb_symbols{$fixupr->[0][3]}) and
-           $fixupr->[1][1] == 6 and exists($sb_symbols{$fixupr->[1][3]}) and
-           $fixupr->[2][1] == 11 and $fixupr->[2][3] eq "S\$STACK" and ($kind = 1)) or
-          ($$datar =~ m@\G\xB8..\x8E\xD0\xBC..\xB8..\x8E\xD8@smg and @$fixupr >= 3 and  # mov ax, ?;; mov ss, ax;; mov sp, ?;; mov ax, ?;; mov ds, ax
-           $fixupr->[0][1] == 1 and exists($sb_symbols{$fixupr->[0][3]}) and
-           $fixupr->[2][1] == 9 and exists($sb_symbols{$fixupr->[2][3]}) and
-           $fixupr->[1][1] == 6 and $fixupr->[1][3] eq "S\$STACK" and ($kind = 2)) or
-          ($$datar =~ m@\G\xB8..\x8E\xD8\x8E\xD0\xBC..@smg and @$fixupr >= 2 and  # mov ax, ?;; mov ds, ax;; mov ss, ax;; mov sp, ?
-           $fixupr->[0][1] == 1 and exists($sb_symbols{$fixupr->[0][3]}) and
-           $fixupr->[1][1] == 8 and $fixupr->[1][3] eq "S\$STACK" and ($kind = 3)) or
-          ($$datar =~ m@\G\xB8..\x8E\xD0\xBC..\x8E\xD8@smg and @$fixupr >= 2 and  # mov ax, ?;; mov ss, ax;; mov sp, ?;; mov ds, ax
-           $fixupr->[0][1] == 1 and exists($sb_symbols{$fixupr->[0][3]}) and
-           $fixupr->[1][1] == 6 and $fixupr->[1][3] eq "S\$STACK" and ($kind = 4))) {
+      if (($$datar =~ m@\G\xB8[\0\1]\0\x8E\xD8\xB8[\0\1]\0\x8E\xD0\xBC..@smg and @$fixupr >= 3 and  # mov ax, ?;; mov ds, ax;; mov ax, ?;; mov ss, ax;; mov sp, ?
+           $fixupr->[0][1] == 1 and $fixupr->[0][2] == 2 and exists($sb_symbols{$fixupr->[0][3]}) and
+           $fixupr->[1][1] == 6 and $fixupr->[1][2] == 2 and exists($sb_symbols{$fixupr->[1][3]}) and
+           $fixupr->[2][1] == 11 and $fixupr->[2][2] == 1 and $fixupr->[2][3] eq "S\$STACK" and ($kind = 1)) or
+          ($$datar =~ m@\G\xB8[\0\1]\0\x8E\xD0\xBC..\xB8[\0\1]\0\x8E\xD8@smg and @$fixupr >= 3 and  # mov ax, ?;; mov ss, ax;; mov sp, ?;; mov ax, ?;; mov ds, ax
+           $fixupr->[0][1] == 1 and $fixupr->[0][2] == 2 and exists($sb_symbols{$fixupr->[0][3]}) and
+           $fixupr->[2][1] == 9 and $fixupr->[2][2] == 2 and exists($sb_symbols{$fixupr->[2][3]}) and
+           $fixupr->[1][1] == 6 and $fixupr->[1][2] == 1 and $fixupr->[1][3] eq "S\$STACK" and ($kind = 2)) or
+          ($$datar =~ m@\G\xB8[\0\1]\0\x8E\xD8\x8E\xD0\xBC..@smg and @$fixupr >= 2 and  # mov ax, ?;; mov ds, ax;; mov ss, ax;; mov sp, ?
+           $fixupr->[0][1] == 1 and $fixupr->[0][2] == 2 and exists($sb_symbols{$fixupr->[0][3]}) and
+           $fixupr->[1][1] == 8 and $fixupr->[1][2] == 1 and $fixupr->[1][3] eq "S\$STACK" and ($kind = 3)) or
+          ($$datar =~ m@\G\xB8[\0\1]\0\x8E\xD0\xBC..\x8E\xD8@smg and @$fixupr >= 2 and  # mov ax, ?;; mov ss, ax;; mov sp, ?;; mov ds, ax
+           $fixupr->[0][1] == 1 and $fixupr->[0][2] == 2 and exists($sb_symbols{$fixupr->[0][3]}) and
+           $fixupr->[1][1] == 6 and $fixupr->[1][2] == 1 and $fixupr->[1][3] eq "S\$STACK" and ($kind = 4))) {
+        # Process segment-base fixups in startup code which sets up ax, ds, ss, sp.
+        # We change `mov ax, 0' with SB\$$SEGMENT_ORDER[1] fixup to `mov ax, ss;; nop'.
+        # We change `mov ax, 1' with SB\$$SEGMENT_ORDER[1] fixup to `mov ax, ss;; inc ax'.
+        # We change `mov sp, ?' with S$STACK fixup to `mov sp, 0' with S$TOP fixup.
+        # We keep `mov ds, ax' and `mov ss, ax' intact.
+        # It would be awesome to remove all this boilerplate code (because ds, ss and sp are already set up , but some other code may jump back to it, or it can rely on the register value of ax.
+        #   TODO(pts): Do some static analysis to prove that neither happens, and then remove these instructions.
+        # !!! Implement it properly, as documented above.
         my $size = pos($$datar) - $i;
         substr($$datar, $i, $size) = "\x90" x $size;  # nop !!! Where is the mov ds, ax?
         # !! By disassembly of _TEXT, prove that there are no jumps to within $i .. $i + $size, thus the initial nops can be replaced with just mov ax, ss;; mov sp, ?.
         substr($$datar, $i, 2) = "\x8C\xD0";  # mov ax, ss
         substr($$datar, $i + 5, 2) = "\x8C\xD0" if $kind == 1;  # mov ax, ss
         substr($$datar, $i + 8, 2) = "\x8C\xD0" if $kind == 2;  # mov ax, ss
-        substr($$datar, $i + (($kind == 1 or $kind == 3) ? $size - 3 : $kind == 2 ? $size - 8 : $size - 5), 1) = "\xBC";  # !!! Keep the mov sp, ?.
-        splice @$fixupr, 0, ($kind > 2 ?  1 : 2);  # Remove 1..2 fixups, keep the S\$STACK fixup.
+        substr($$datar, $i + (($kind == 1 or $kind == 3) ? $size - 3 : $kind == 2 ? $size - 8 : $size - 5), 3) = "\xBC\0\0";  # Keep `mov sp, 0' for the S\$TOP fixup.
+        $fixupr->[$kind > 2 ? 1 : 2][3] = "S\$TOP";  # Change from S\$STACK.
+        splice @$fixupr, 0, ($kind > 2 ?  1 : 2);  # Remove 1..2 fixups, keep the S\$TOP fixup.
       } elsif ($$datar =~ m@\G\xBA..@smg and @$fixupr >= 1 and  # mov dx, ?;; then typically mov ds, dx (\x8E\xDA). Generated by TASM ideal mode startupcode.
-               $fixupr->[0][1] == 1 and $fixupr->[0][2] == 2 and exists($sb_symbols{$fixupr->[0][3]})) {
+               $fixupr->[0][1] == 1 and $fixupr->[0][0] == 3 and $fixupr->[0][2] == 2 and exists($sb_symbols{$fixupr->[0][3]})) {
         my $size = pos($$datar) - $i;
         substr($$datar, $i, 3) = "\x8C\xD2\x90";  # mov dx, ss;; nop.
         splice @$fixupr, 0, 1;
-      }
-      my $stack_size_data = pack("v", $segment_sizes{STACK});
-      for my $fixup (@$fixupr) {
-        my($endofs, $ofs, $ltypem, $symbol) = @$fixup;
-        substr($$datar, $ofs, $endofs - $ofs) = "\0" x ($endofs - $ofs) if $symbol eq "S\$STACK" and $ltypem == 1;  # Always 1, it's offset. Set displacement to 0.
       }
     }
   }
@@ -1248,7 +1251,7 @@ call__fullprog_end:  ; Make fullprog_code without fullprog_end fail.
     $segment_vofs{_DATA} = $vofs; $vofs += length($ledata{_DATA});
     $segment_vofs{_BSS} = $vofs; $vofs += $segment_sizes{_BSS};
     $segment_vofs{STACK} = $vofs + $stack_align_size + $stack_size; $vofs += $stack_align_size + $stack_size;
-    my $vofs_top = $vofs;  $vofs = undef;
+    $segment_vofs{TOP} = $vofs; my $vofs_top = $vofs;  $vofs = undef;
     die "$0: assert vofs_top mismatch\n" if $vofs_top != ($is_exe ? $after_text_vofs & 15 : $after_text_vofs) + $data_size + $segment_sizes{_BSS} + $stack_align_size + $stack_size;
     my %symbol_vofs;  # $symbol => $segment_vofs + $obj_ofs.
     for my $segment_name (keys %segment_symbols) {
@@ -1259,6 +1262,7 @@ call__fullprog_end:  ; Make fullprog_code without fullprog_end fail.
         $symbol_vofs{$symbol} = $this_segment_vofs + $ofs;
       }
     }
+    $symbol_vofs{"S\$TOP"} = $vofs_top;
     if ($is_exe) {
       my $image_size = 16 + $after_text_vofs + $data_size;  # TODO(pts): Add an option to align _DATA and _BSS to word bondary.
       my $nobits_size = $vofs_top - $data_size - $dgroup_vofs;
