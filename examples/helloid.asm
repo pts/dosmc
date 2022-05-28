@@ -2,7 +2,7 @@ ideal  ; Optional for LZASM. Makes this file work with TASM as well. Also dosmc 
 model small
 
 dataseg  ; Set segment alignment to byte (now it's word).
-lpText:	db "Hello, world!$"
+lpText:	db "Hello, World!", 13, 10, '$'
 
 codeseg
 	startupcode  ; Works in TASM 2.0, doesn't work in TASM 1.01.

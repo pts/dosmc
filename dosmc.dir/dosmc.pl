@@ -1463,11 +1463,23 @@ sub detect_asm($;$) {
   die "$0: fatal: cannot open .asm file for reading: $asmfn\n" if !open($f, "<", $asmfn);
   binmode($f);  # Would also work without it, but be deterministc.
   local $_;
+  my $is_ideal = 0;
   while (<$f>) {
     s@\A\s+@@;
-    if (m@\A(?:;|GLOBAL\s+|PUBLIC\s+|ORG\s+)@i) {  # Available in both "wasm" and "nasm".
-    } elsif (m@\A[.]MODEL\s+FLAT\s*(?:;.*)?@si) {
+    if ($is_ideal) {
+      if (m@\A;@ or !y@\r\n@@c) {
+      } elsif (m@\AMODEL\s+(?:SMALL|TINY)\s*(?:;.*)?\Z(?!\n)@si) {
+        # TODO(pts): Sypport IDEAL + MODEL FLAT.
+        close($f); return "wasm-ideal";  # Turbo Assembler ideal mode.
+      } else {
+        close($f);
+        die "$0: fatal: IDEAL directive must be followed by MODEL SMALL line in .asm file: $asmfn\n";
+      }
+    } elsif (m@\A(?:;|GLOBAL\s+|PUBLIC\s+|ORG\s+)@i) {  # Available in both "wasm" and "nasm".
+    } elsif (m@\A[.]MODEL\s+FLAT\s*(?:;.*)?\Z(?!\n)@si) {
       close($f); return "wasm-flat";
+    } elsif (m@\AIDEAL\s*(?:;.*)?\Z(?!\n)@si) {
+      $is_ideal = 1;
     } elsif (m@\A([.]|EXTRN\s+|DOSSEG\s+|\w+\s+(?:GROUP|SEGMENT|MACRO|=)\s+)@i) {
       # wasm directives starting with .: .186 .286C .286P .287 .386P .387
       # .486P .586P .686P .8086 .8087 .ALPHA .BREAK .CODE .CONST .CONTINUE
@@ -1920,7 +1932,7 @@ sub compiler_frontend {
     }
     if ($ext eq "asm") { $ext = detect_asm($srcfn) }
     elsif ($ext eq "wasm") { $ext = detect_asm($srcfn, "wasm") }  # For "wasm-flat".
-    die "$0: fatal: .$ext source incompatible with -bt=bin: $srcfn\n" if $is_bin and $ext ne "nasm" and $ext ne "wasm" and $ext ne "wasm-flat";
+    die "$0: fatal: .$ext source incompatible with -bt=bin: $srcfn\n" if $is_bin and $ext ne "nasm" and $ext ne "wasm" and $ext ne "wasm-flat" and $ext ne "wasm-ideal";
     die "$0: fatal: source uses the flat memory model, it requires -bt=bin: $srcfn\n" if !$is_bin and $ext eq "wasm-flat";
     my $objfn = defined($forced_objfn) ? $forced_objfn : $is_bin ? "$objbasefn.bin" : $PL eq "-c" ? "$objbasefn.obj" : "$objbasefn.tmp.obj";
     push @objfns, $objfn if $PL ne "-pl" and $PL ne "-zs";
@@ -1951,8 +1963,11 @@ sub compiler_frontend {
         print STDERR "$0: error: nasm failed\n"; ++$errc;
       }
       splice @nasm_cmd, $nasm_cmd_size;
-    } elsif ($ext eq "wasm" or $ext eq "wasm-flat") {
-      push @wasm_cmd, ($ext eq "wasm-flat" ? ("-mf", ($CPUF gt "-3" ? $CPUF : "-3")) : ("-ms", $CPUF));
+    } elsif ($ext eq "wasm" or $ext eq "wasm-flat" or $ext eq "wasm-ideal") {
+      # With `-zcm=ideal', it's impossible to specify `-ms' (small mmeory
+      # model in the command-line), the `MODEL SMALL' directive must be
+      # present the .asm file (checked by detect_asm).
+      push @wasm_cmd, ($ext eq "wasm-flat" ? ("-mf", ($CPUF gt "-3" ? $CPUF : "-3")) : $ext eq "wasm-ideal" ? ("-zcm=ideal", $CPUF) : ("-ms", $CPUF));
       my $binobjfn;
       if ($PL eq "-c" and $target eq "bin") {
         $binobjfn = "$objbasefn.tmp.obj";
