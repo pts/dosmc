@@ -72,7 +72,7 @@ __U4D:		or cx,cx
 		add ax,bx
 		adc dx,cx
 		jae @$12
-		jmp @$10
+		jmp short @$10
 @$13:		add ax,bx
 		adc dx,cx
 @$14:		mov bx,ax
