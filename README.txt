@@ -291,19 +291,23 @@ Function calling convention (ABI):
     arguments to the stack in reverse order (i.e. push the last argument
     first; for 32-bit arguments, push higher half first; push 8-bit
     arguments zero-extended to 16 bits).
-  * Otherwise, if the 1st argument is 32-bit, and the 2nd-argument is 8-bit
+  * Otherwise, if the 1st argument is 32-bit, and the 2nd argument is 8-bit
     or 16-bit, and the 3rd argument is 32-bit, then pass the 1st argument in
     DX:AX, the 2nd argument zero-extended in BX, and push any remaining
     arguments to the stack in reverse order.
-  * Otherwise, if the 1st argument is 32-bit, and the 2nd-argument is 8-bit
+  * Otherwise, if the 1st argument is 32-bit, and the 2nd argument is 8-bit
     or 16-bit, and the 3rd argument is 8-bit or 16-bit, then pass the 1st
     argument in DX:AX, the 2nd argument zero-extended in BX, the 3rd
     argument zero-extended in CX, and push any remaining arguments to the
     stack in reverse order.
+  * Otherwise, if the 2nd argument is 32-bit, and the 3rd argument is 8-bit
+    or 16-bit, then pass the 1st argument zero-extended in AX, the 2nd
+    argument in CX:BX, the 3rd argument zero-extended in DX, and push any
+    remaining arguments to the stack in reverse order.
   * Otherwise, if the 2nd argument is 32-bit, then pass the 1st argument
     zero-extended in AX, the 2nd argument in CX:BX, and push any remaining
     arguments to the stack in reverse order. (DX is not used for argument
-    passing.)
+    passing.) (TODO(pts): Is this really correct?)
   * Otherwise, pass the first 2, 3 or 4 arguments (as many as possible)
     zero-extended in AX, then DX, then BX, then CX, and push any remaining
     arguments to the stack in reverse order.

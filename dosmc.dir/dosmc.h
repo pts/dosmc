@@ -20,6 +20,7 @@ typedef short int16_t;
 typedef long int32_t;
 typedef unsigned int size_t;  /* TODO(pts): 64-bit tcc. */
 typedef int ssize_t;  /* TODO(pts): 64-bit tcc. */
+typedef long off_t;
 
 /* Can be specified multiple times (and will be emitted once each for .c,
  * and deduplicate for .nasm). Works with or without trailing semicolon.
@@ -255,7 +256,12 @@ int unlink(const char *pathname);  /* Same as remove(). */
 ssize_t read(int fd, void *buf, size_t count);
 ssize_t write(int fd, const void *buf, size_t count);
 
-#define O_RDONLY 0
+#define SEEK_SET 0  /* whence value below. */
+#define SEEK_CUR 1
+#define SEEK_END 2
+off_t lseek(int fd, off_t offset, int whence);  /* Just 32-bit off_t. */
+
+#define O_RDONLY 00  /* flags bitfield value below. */
 #define O_WRONLY 1
 #define O_RDWR 2
 #define O_BINARY 0  /* Useless, it's always binary. */

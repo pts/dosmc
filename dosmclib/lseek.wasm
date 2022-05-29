@@ -1,0 +1,16 @@
+		public lseek_
+		extrn _small_code_:byte
+		.code
+
+; off_t lseek(int fd, off_t offset, int whence);
+; Optimized for size. AX == fd, CX:BX == offset, DX == whence.
+lseek_:		xchg ax, bx		; BX := fd; AX := low offset.
+		xchg ax, dx		; AX := whence; DX := low offset.
+		mov ah, 42h
+		int 21h
+		jnc @$ok
+		sbb ax, ax		; AX := -1.
+		sbb dx, dx		; DX := -1.
+@$ok:		ret
+
+		end
