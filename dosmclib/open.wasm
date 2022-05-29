@@ -1,0 +1,20 @@
+		public open_
+		public open2_
+		extrn _small_code_:byte
+		.code
+
+; int open(const char *pathname, int flags, int mode);
+; int open2(const char *pathname, int flags);
+; Optimized for size. AX == pathname, DX == flags, BX == mode.
+; Unix open(2) is able to create new files (O_CREAT), in DOS please use
+; creat() for that.
+; mode is ignored. Recommended value: 0644, for Unix compatibility.
+open2_:
+open_:		xchg ax, dx		; DX := pathname; AX := junk.
+		mov ah, 3dh
+		int 21h
+		jnc @$ok
+		sbb ax, ax		; AX := -1.
+@$ok:		ret
+
+		end

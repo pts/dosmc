@@ -1,0 +1,17 @@
+		public close_
+		extrn _small_code_:byte
+		.code
+
+; int close(int fd);
+; Optimized for size. AX == fd.
+; for Unix compatibility.
+close_:		push bx
+		xchg ax, bx		; BX := fd; AX := junk.
+		mov ah, 3eh
+		int 21h
+		jnc @$ok
+		sbb ax, ax		; AX := -1.
+@$ok:		pop bx
+		ret
+
+		end

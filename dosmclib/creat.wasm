@@ -1,0 +1,23 @@
+		public creat_
+		extrn _small_code_:byte
+		.code
+
+; int creat(const char *pathname, int mode);
+; Optimized for size. AX == pathname, DX == mode.
+; The value O_CREAT | O_TRUNC | O_WRONLY is used as flags.
+; mode is ignored, except for bit 8 (read-only). Recommended value: 0644,
+; for Unix compatibility.
+creat_:		push cx
+		xchg ax, dx		; DX := pathname; AX := mode.
+		xor cx, cx
+		test ah, 1
+		jz @$1
+		inc cx			; CX := 1 means read-only.
+@$1:		mov ah, 3ch
+		int 21h
+		jnc @$ok
+		sbb ax, ax		; AX := -1.
+@$ok:		pop cx
+		ret
+
+		end

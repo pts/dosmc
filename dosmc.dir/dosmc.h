@@ -255,4 +255,18 @@ int unlink(const char *pathname);  /* Same as remove(). */
 ssize_t read(int fd, void *buf, size_t count);
 ssize_t write(int fd, const void *buf, size_t count);
 
+#define O_RDONLY 0
+#define O_WRONLY 1
+#define O_RDWR 2
+#define O_BINARY 0  /* Useless, it's always binary. */
+/* mode is ignored. */
+int open(const char *pathname, int flags, int mode);
+/* Same as open with mode == 0x644, but shorter. */
+int open2(const char *pathname, int flags);
+/* Equivalent to Unix open flags O_CREAT | O_TRUNC | O_WRONLY.
+ * mode is ignored.
+ */
+int creat(const char *pathname, int mode);
+int close(int fd);
+
 #endif  /* _DOSMC_H_ */
