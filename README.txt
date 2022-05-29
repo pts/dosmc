@@ -198,8 +198,8 @@ it's inconvenient to save to these directories, then save the Perl script
 anywhere, and specify the directory name in $ENV{DOSMCEXT}.
 
 You can also run some of the tools used by dosmc (such as nasm and wdis)
-directly as subcommands, e.g.  `./dosmc nasm ...'.  dosmc uses the same path
-lookup a for extension commands.  The actual filename may have an .exe or
+directly as subcommands, e.g. `./dosmc nasm ...'. dosmc uses the same path
+lookup a for extension commands. The actual filename may have an .exe or
 .cmd extension on Windows, and an .elf or .sh extension on non-Windows (e.g.
 Linux or macOS).
 
@@ -278,8 +278,8 @@ Function calling convention (ABI):
   32-bit far pointer; function return value is 8-bit integer, 16-bit
   integer, 32-bit integer or 16-bit near pointer, there are no varargs.
 * Return the return value (if not void) in AL for 8-bit result, AX for
-  16-bit result, and DX:AX for 32-bit result.  (For far pointers, DX is the
-  segment.  For integers, DX is the higher, more significant half.)
+  16-bit result, and DX:AX for 32-bit result. (For far pointers, DX is the
+  segment. For integers, DX is the higher, more significant half.)
 * Rules for argument passing:
   * If there are no arguments, don't pass any.
   * Otherwise, if there is 1 argument, and it's 32-bit, then pass it in
@@ -319,7 +319,7 @@ Function calling convention (ABI):
   used for argument passing.
 * The function may use registers AX, ES and the arithmetic FLAGS as scratch,
   no need to preserve them (but AX or AL may be used as return value), and
-  for DF (direction flag) must be set to 0 (e.g.  instruction `cld') before
+  for DF (direction flag) must be set to 0 (e.g. instruction `cld') before
   each function call (if changed by the caller before), and before
   returning.
 
@@ -356,7 +356,7 @@ Creating binary files with dosmc:
 
 * From a .wasm source, the binary file is first built with `wasm', and then
   it is linked to a binary file by the dosmc internal linker (like a .com
-  file, but with `org 0' by default).  The default is `-ms -0' (`.model
+  file, but with `org 0' by default). The default is `-ms -0' (`.model
   small', `.8086' and .code with use16), but you can change it to `-mf -3'
   (`.model flat', .386' and .code with use32) by specifying `.model flat' at
   the beginning of the .wasm (or .asm) source file. You can also use `org ...'
