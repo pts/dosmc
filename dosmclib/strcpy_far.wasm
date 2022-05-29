@@ -1,0 +1,25 @@
+		public strcpy_far_
+		extrn _small_code_:byte
+		.code
+
+; char far *strcpy_far(char far *dest, const char far *src);
+; Assumes that offset in dest and src don't wrap around.
+; Optimized for size. DX:AX == s1, CX:BX == s2.
+strcpy_far_:	push di
+		push ds
+		mov es, dx
+		mov ds, cx
+		xchg si, bx
+		xchg di, ax		; DI := dest; AX := junk.
+		push di
+@$again:	lodsb
+		stosb
+		cmp al, 0
+		jne @$again
+		pop ax			; Will return dest.
+		xchg si, bx		; Restore SI.
+		pop ds
+		pop di
+		ret
+
+		end

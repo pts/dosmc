@@ -122,6 +122,7 @@ parm [ si ] [ di ] [ cx] \
 modify [ si di cx ];
 
 int strcmp(const char *s1, const char *s2);
+int strcmp_far(const char far *s1, const char far *s2);  /* Assumes that offset in s1 and s2 doesn't wrap around. */
 static int strcmp_inline(const char *s1, const char *s2);
 #pragma aux strcmp_inline = \
 "xor ax, ax" \
@@ -136,6 +137,7 @@ parm [ si ] [ di ] \
 modify [ si di cx ];
 
 char *strcpy(char *dest, const char *src);
+char far *strcpy_far(char far *dest, const char far *src);  /* Assumes that offset in dest and src don't wrap around. */
 static char *strcpy_inline(char *dest, const char *src);
 #pragma aux strcpy_inline = \
 "push di" \

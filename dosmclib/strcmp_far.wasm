@@ -1,0 +1,29 @@
+		public strcmp_far_
+		extrn _small_code_:byte
+		.code
+
+; int strcmp_far(const char far *s1, const char far *s2);
+; Assumes that offset in s1 and s2 doesn't wrap around.
+; Optimized for size. DX:AX == s1, CX:BX == s2.
+strcmp_far_:	push si
+		push ds
+		mov ds, dx
+		mov es, cx
+		xchg si, ax		; SI := s1, AX := junk.
+		xor ax, ax
+		xchg di, bx
+@$next:		lodsb
+		scasb
+		jne @$diff
+		cmp al, 0
+		je @$done
+		jmp short @$next
+@$diff:		mov al, 1
+		jnc @$done
+		neg ax
+@$done:		xchg di, bx		; Restore original DI.
+		pop ds
+		pop si
+		ret
+
+		end
