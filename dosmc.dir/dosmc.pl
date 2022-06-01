@@ -1022,7 +1022,7 @@ sub link_executable($$$$@) {
     # No need to disambiguate NASM symbols like code_end, because
     # wcc adds _ prefix or suffix to all symbols (including static ones).
     if ($is_exe) {
-      my $stack_size_expr = ($segment_sizes{STACK} or "0x10000-((auto_stack_aligned-bss_start)+(data_end-data_start)+((code_end-code_startseg)&15))");
+      my $stack_size_expr = ($segment_sizes{STACK} or "0x10000-((S\$STACK-bss_start)+(data_end-data_start)+((code_end-code_startseg)&15))");
 # Based on https://github.com/pts/pts-nasm-fullprog/blob/master/fullprog_dosexe.inc.nasm
 $fullprog_code = q(
 section .text align=1 vstart=-0x10
@@ -1037,7 +1037,7 @@ dw minalloc_diff_is_nonnegative * ((minalloc_diff + 15) >> 4)  ; minalloc: parag
 dw 0xffff  ; maxalloc: paragraph count of maximum required memory.
 dw (code_end-code_startseg)>>4  ; Stack segment (ss) base, will be same as ds. Low 4 bits are in vstart= of .data.
 code_startseg:
-dw ((code_end-code_startseg)&15)+(bss_end-bss_start)+(data_end-data_start) ; Stack pointer (sp).
+dw ((code_end-code_startseg)&15)+(S$TOP-bss_start)+(data_end-data_start) ; Stack pointer (sp).
 dw 0  ; No file checksum.
 dw code_start-code_startseg  ; Instruction pointer (ip): 8.
 dw 0  ; Code segment (cs) base.
@@ -1058,21 +1058,21 @@ section .bss align=1  ; vstart=0
 bss_start:
 );
 $fullprog_end = qq(
-auto_stack:  ; Autodetect stack size to fill data segment to 65535 bytes.
-resb ((auto_stack-bss_start)+(data_end-data_start)+(code_end-code_startseg))&1  ; Word-align stack, for speed.
-auto_stack_aligned:
+bss_end:
+resb ((bss_end-bss_start)+(data_end-data_start)+(code_end-code_startseg))&1  ; Word-align stack, for speed.
+S\$STACK:
+; Autodetect stack size to fill data segment to 65535 bytes.
 %define stack_size ($stack_size_expr)
 times -(((stack_size-0x10)>>31)&1) resb 0  ; Assert that stack size is at least 0x10.
-stack: resb stack_size
-S\$STACK:
-bss_end:
-minalloc_diff equ bss_end-bss_start - (-((data_end-data_start)+(code_end-exe_header))&511)
+resb stack_size
+S\$TOP:
+minalloc_diff equ S\$TOP-bss_start - (-((data_end-data_start)+(code_end-exe_header))&511)
 minalloc_diff_is_nonnegative equ (~(minalloc_diff >> 31) & 1)
 ; Fails with `error: TIMES value -... is negative` if data is too large (>~64 KiB).
-times -(((bss_end-bss_start)+(data_end-data_start))>>16) db 0
+times -(((S\$TOP-bss_start)+(data_end-data_start))>>16) db 0
 );
     } else {  # .com or .bin
-      my $stack_size_expr = ($segment_sizes{STACK} or "0x10000-4-((auto_stack_aligned-bss_start)+(data_end-data_start)+(code_end-code_start+0x100))");
+      my $stack_size_expr = ($segment_sizes{STACK} or "0x10000-4-((S\$STACK-bss_start)+(data_end-data_start)+(code_end-code_start+0x100))");
       my $text_vofs = $is_com ? 0x100 : $text_vofs_for_bin;
 # Based on https://github.com/pts/pts-nasm-fullprog/blob/master/fullprog_dosexe.inc.nasm
 $fullprog_code = qq(
@@ -1096,26 +1096,24 @@ section .bss align=1  ; vstart=0
 bss_start:
 );
 $fullprog_end = $is_com ? qq(
-auto_stack:  ; Autodetect stack size to fill main segment to almost 65535 bytes.
-resb ((auto_stack-bss_start)+(data_end-data_start)+(code_end-code_start+0x100))&1  ; Word-align stack, for speed.
-auto_stack_aligned:
+bss_end:
+resb ((bss_end-bss_start)+(data_end-data_start)+(code_end-code_start+0x100))&1  ; Word-align stack, for speed.
+S\$STACK:
+; Autodetect stack size to fill main segment to almost 65535 bytes.
 %define stack_size ($stack_size_expr)
 times -(((stack_size-0x10)>>31)&1) resb 0  ; Assert that stack size is at least 0x10.
 ; This is fake, end of stack depends on DOS, typically sp==0xfffe or sp==0xfffc.
-stack: resb stack_size
-S\$STACK:
-bss_end:
+resb stack_size
+S\$TOP:
 call__fullprog_end:  ; Make fullprog_code without fullprog_end fail.
 ; Fails with `error: TIMES value -... is negative` if data is too large (>~64 KiB).
 ; +3 because some DOS systems set sp to 0xfffc instead of 0xffff
 ; (http://www.fysnet.net/yourhelp.htm).
-times -(((bss_end-bss_start)+(data_end-data_start)+(code_end-code_start+0x100)+3)>>16) db 0
+times -(((S\$TOP-bss_start)+(data_end-data_start)+(code_end-code_start+0x100)+3)>>16) db 0
 ) : qq(
-auto_stack:  ; Autodetect stack size to fill main segment to almost 65535 bytes.
-auto_stack_aligned:
-stack:
+bss_end:  ; Autodetect stack size to fill main segment to almost 65535 bytes.
 S\$STACK:
-bss_end:
+S\$TOP:
 call__fullprog_end:  ; Make fullprog_code without fullprog_end fail.
 );
     }
@@ -1129,7 +1127,7 @@ call__fullprog_end:  ; Make fullprog_code without fullprog_end fail.
       # .exe startup: ds=es=PSP, cs+ip+ss+sp are base+from_exe_header.
       print $exef qq(push es\n) if $is_exe and ($entry_point_mode == 2 or $lf{start_es_psp});
       print $exef qq(push ds\npop es\n) if $is_exe;
-      print $exef qq(mov di, bss_start\nmov cx, (stack-bss_start+1)>>1\nxor ax, ax\nrep stosw\n);
+      print $exef qq(mov di, bss_start\nmov cx, (bss_end-bss_start+1)>>1\nxor ax, ax\nrep stosw\n);
       print $exef qq(pop es\n) if $is_exe and ($entry_point_mode == 2 or $lf{start_es_psp});
     } elsif ($need_clear_ax) {
       print $exef qq(db 0x31, 0xC0  ; xor ax, ax\n  ; argc=0);
@@ -1175,7 +1173,7 @@ call__fullprog_end:  ; Make fullprog_code without fullprog_end fail.
     my $clear_bss = $do_clear_bss_with_code ? (
         "\x06" x !(!($is_exe and ($entry_point_mode == 2 or $lf{start_es_psp}))) .  # push es  !! TODO(pts): For $entry_point_mode == 2, put the argv parsing before $clear_bss, thus $clear_bss will be allowed to modify es.
         "\x1E\x07" x !(!($is_exe)) .  # push ds;; pop es
-        pack("a1va1va4", "\xBF", 0, "\xB9", ($segment_sizes{_BSS} + 1) >> 1, "\x31\xC0\xF3\xAB") .  # Affected by fixups below. mov di, bss_start;; mov cx, (stack-bss_start+1)>>1;; xor ax, ax;; rep stosw
+        pack("a1va1va4", "\xBF", 0, "\xB9", ($segment_sizes{_BSS} + 1) >> 1, "\x31\xC0\xF3\xAB") .  # Affected by fixups below. mov di, bss_start;; mov cx, (bss_end-bss_start+1)>>1;; xor ax, ax;; rep stosw
         "\x07" x !(!($is_exe and ($entry_point_mode == 2 or $lf{start_es_psp})))) :  # pop es
         $need_clear_ax ? "\x31\xC0" : "";  # xor ax, ax  ; argc=0.
     # $call_main is affected by fixups below.
