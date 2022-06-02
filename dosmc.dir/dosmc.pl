@@ -1943,7 +1943,7 @@ sub compiler_frontend {
   # If the user doesn't specift -bt=..., then $target is still empty, and we
   # don't define __DOSMC_COM__ or __DOSMC_EXE__.  This is on purpose.
   push @d_args, "-D__DOSMC_COM__" if $target eq "com";  # Shouldn't make a difference, identical .obj files work for .exe and .com.
-  push @d_args, "-D__DOSMC_EXE__" if $target eq "exe";  # Shouldn't make a difference, identical .obj files work for .exe and .com.
+  push @d_args, "-D__DOSMC_EXE__" if ($target eq "exe") or (!length($target) and $PL eq "-cd");  # Shouldn't make a difference, identical .obj files work for .exe and .com.
   push @d_args, "-D__DOSMC_BIN__" if $is_bin;
   push @d_args, @defines;
   my @wcc_cmd = ('wcc', @d_args);
