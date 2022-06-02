@@ -1,0 +1,59 @@
+		public dump_reg
+		extrn _small_code_:byte
+		.code
+
+; Prints a single 16-bit CPU register on DOS.
+; Call it with `call strict near dump_reg' (or just `call dump_reg').
+; Input: AX: 2-byte name of the register.
+; Input: word [sp]: value of the register.
+; Clobbers AX and FLAGS, doesn't modify anything else.
+; Pops (discards) the word [sp].
+dump_reg:	push ax
+		mov al, ' '
+		int 0x29
+		pop ax
+		int 0x29
+		mov al, ah
+		int 0x29
+		cmp al, 'l'
+		jne @$0
+		mov al, 'a'
+		int 0x29
+		mov al, 'g'
+		int 0x29
+		mov al, 's'
+		int 0x29
+@$0:		mov al, ':'
+		int 0x29
+		push bp
+		mov bp, sp
+		mov al, [bp + 5]
+		aam 0x10
+		add ax, '00'
+		xchg al, ah
+		cmp al, 9 + '0'
+		jna @$1
+		add al, 7 + 32
+@$1:		int 0x29
+		xchg al, ah
+		cmp al, 9 + '0'
+		jna @$2
+		add al, 7 + 32
+@$2:		int 0x29
+		mov al, [bp + 4]
+		aam 0x10
+		add ax, '00'
+		xchg al, ah
+		cmp al, 9 + '0'
+		jna @$3
+		add al, 7 + 32
+@$3:		int 0x29
+		xchg al, ah
+		cmp al, 9 + '0'
+		jna @$4
+		add al, 7 + 32
+@$4:		int 0x29
+		pop bp
+		ret 2
+
+		end
