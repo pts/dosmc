@@ -45,6 +45,11 @@ typedef long off_t;
  */
 #define __LINKER_FLAG(name) extern int _linker_flag_##name; __PRAGMA(extref _linker_flag_##name)
 
+/* Symbol value is the DS-relative segment (paragraph) value of the byte
+ * after the top of the stack.
+ */
+extern char __sd_top__[];
+
 /* Writes a $-delimited string to stdout. You may want to create msg with
  * STRING_WITHOUT_NUL to save 1 byte.
  *

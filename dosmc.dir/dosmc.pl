@@ -626,6 +626,7 @@ sub load_obj($$;$) {
   }
   my %undefined_symbols = map { $_ => 1 } @extdef;
   delete $undefined_symbols{$extdef[0]};
+  die "$0: fatal: ___sd_top__ must not be defined in .obj file: $objfn\n" if exists($symbol_ofs{___sd_top__});
   for my $symbol (keys %symbol_ofs) {
     delete $undefined_symbols{$symbol};
   }
@@ -875,6 +876,7 @@ sub link_executable($$$$@) {
     @objs = @skipped_objs;
     #print STDERR "info: next round\n";
   }
+  delete $undefined_symbols{"G\$___sd_top__"};
   if (%undefined_symbols) {
     my @undefined_symbols = sort keys %undefined_symbols;
     my @nlu = grep { substr($_, 0, 2) ne "G\$" } @undefined_symbols;
@@ -1071,6 +1073,7 @@ S\$STACK:
 times -(((stack_size-0x10)>>31)&1) resb 0  ; Assert that stack size is at least 0x10.
 resb stack_size
 S\$TOP:
+G\$___sd_top__ equ ((S\$TOP-bss_start)+(data_end-data_start)+15) >> 4
 minalloc_diff equ S\$TOP-bss_start - (-((data_end-data_start)+(code_end-exe_header))&511)
 minalloc_diff_is_nonnegative equ (~(minalloc_diff >> 31) & 1)
 ; Fails with `error: TIMES value -... is negative` if data is too large (>~64 KiB).
@@ -1110,6 +1113,7 @@ times -(((stack_size-0x10)>>31)&1) resb 0  ; Assert that stack size is at least 
 ; This is fake, end of stack depends on DOS, typically sp==0xfffe or sp==0xfffc.
 resb stack_size
 S\$TOP:
+G\$___sd_top__ equ ((S\$TOP-bss_start)+(data_end-data_start)+(code_end-code_start+0x100)+15) >> 4
 call__fullprog_end:  ; Make fullprog_code without fullprog_end fail.
 ; Fails with `error: TIMES value -... is negative` if data is too large (>~64 KiB).
 ; +3 because some DOS systems set sp to 0xfffc instead of 0xffff
@@ -1119,6 +1123,7 @@ times -(((S\$TOP-bss_start)+(data_end-data_start)+(code_end-code_start+0x100)+3)
 bss_end:  ; Autodetect stack size to fill main segment to almost 65535 bytes.
 S\$STACK:
 S\$TOP:
+G\$___sd_top__ equ 0
 call__fullprog_end:  ; Make fullprog_code without fullprog_end fail.
 );
     }
@@ -1273,6 +1278,7 @@ call__fullprog_end:  ; Make fullprog_code without fullprog_end fail.
       }
     }
     $symbol_vofs{"S\$TOP"} = $vofs_top;
+    $symbol_vofs{"G\$___sd_top__"} = ($vofs_top + 15) >> 4;
     if ($is_exe) {
       my $image_size = 16 + $after_text_vofs + $data_size;  # TODO(pts): Add an option to align _DATA and _BSS to word bondary.
       my $nobits_size = $vofs_top - $data_size - $dgroup_vofs;
