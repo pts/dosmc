@@ -50,6 +50,15 @@ typedef long off_t;
  */
 extern char __sd_top__[];
 
+#if __DOSMC_COM__
+#define __MOV_AX_PSP__ "mov ax, cs"
+#define __MOV_AX_PSP_MCB__ "mov ax, cs" "dec ax"
+#endif
+#if __DOSMC_EXE__
+#define __MOV_AX_PSP__ "mov ax, cs" "sub ax, 10h"
+#define __MOV_AX_PSP_MCB__ "mov ax, cs" "sub ax, 11h"
+#endif
+
 /* Writes a $-delimited string to stdout. You may want to create msg with
  * STRING_WITHOUT_NUL to save 1 byte.
  *
