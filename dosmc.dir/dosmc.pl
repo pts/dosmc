@@ -860,6 +860,9 @@ sub link_executable($$$$@) {
           $symbol = lc($symbol);  # Microsoft MASM 4.0 creates all symbols in uppercase.
           if (exists($LINKER_FLAG_OK{$symbol})) {
             $lf{$symbol} = 1;
+          } elsif ($symbol =~ m@\Astack_size__(0[xX][a-fA-F0-9]+|0[bB][01]+|0[0-7]+|([1-9][0-9]+))\Z(?!\n)@) {
+            my $v = defined($2) ? int($2) : oct($1);  # oct can do hex and binary as well.
+            $lf{stack_size} = $v if $v > ($lf{stack_size} or 0);
           } else {
             $unknown_lf{$symbol} = 1;
           }
@@ -996,6 +999,8 @@ sub link_executable($$$$@) {
   my $entry_point_mode = !($is_com or $is_exe) ? 4 : defined($text_symbol_ofs{"G\$_start_"}) ? 1 : (defined($text_symbol_ofs{"G\$main_"}) and $do_use_argc) ? 2 : defined($text_symbol_ofs{"G\$main_"}) ? 3 : 0;
   die "$0: assert: bad entry_point_mode\n" if !$entry_point_mode and $link_mode != 2;  # We've checked $entry_count above already.
 
+  $segment_sizes{STACK} = $lf{stack_size} if ($lf{stack_size} or 0) > $segment_sizes{STACK};
+  my $do_set_com_sp = ($is_com and $segment_sizes{STACK}) ? 1 : 0;
   my $does_entry_point_return = !defined($exit_code);  # TODO(pts): Smarter detection.
   my $is_data_used = !defined($exit_code);
   my $need_clear_ax = ($entry_point_mode == 2 and !$lf{uninitialized_argc} and $lf{force_argc_zero}) ? 1 : 0;
@@ -1122,6 +1127,7 @@ call__fullprog_end:  ; Make fullprog_code without fullprog_end fail.
     print $exef qq($fullprog_code\n);
     print $exef qq(db 0x16  ; push ss\ndb 0x1f  ; pop ds\n) if $is_exe and $is_data_used;
     print $exef qq(cld\n) if $need_clear_df;
+    print $exef ($entry_point_mode == 1 ? qq(pop ax\nmov sp, S\$TOP\npush ax\n) : qq(mov sp, S\$TOP\n)) if $do_set_com_sp;  # ax (word [sp]) is 0, pointing to `int 0x21' in PSP.
     if ($do_clear_bss_with_code) {  # $clear_bss.
       # .com startup: cs=ds=es=ss=PSP, ip=0x100, cs:0x100=first_file_byte.
       # .exe startup: ds=es=PSP, cs+ip+ss+sp are base+from_exe_header.
@@ -1168,8 +1174,13 @@ call__fullprog_end:  ; Make fullprog_code without fullprog_end fail.
     print $exef qq(ubss:\n$ubss$fullprog_end\n);
   } else {  # emit_executable.
     my $init_regs = "";
-    $init_regs .= "\x16\x1F" if $is_exe and $is_data_used;  # push ss; pop ds
+    $init_regs .= "\x16\x1F" if $is_exe and $is_data_used;  # push ss;; pop ds.
     $init_regs .= "\xFC" if $need_clear_df;  # String instructions (e.g. movsb, stosw) need df=0 (cld).
+    my $init_regs_stop_ofs;
+    if ($do_set_com_sp) {
+      $init_regs .= $entry_point_mode == 1 ? qq(\x58\xBC\x00\x00\x50) : qq(\xBC\x00\x00);  # pop ax;; mov sp, S\$TOP;; push ax. ax (word [sp]) is 0, pointing to `int 0x21' in PSP.
+      $init_regs_stop_ofs = length($init_regs) - ($entry_point_mode == 1 ? 3 : 2);
+    }
     my $clear_bss = $do_clear_bss_with_code ? (
         "\x06" x !(!($is_exe and ($entry_point_mode == 2 or $lf{start_es_psp}))) .  # push es  !! TODO(pts): For $entry_point_mode == 2, put the argv parsing before $clear_bss, thus $clear_bss will be allowed to modify es.
         "\x1E\x07" x !(!($is_exe)) .  # push ds;; pop es
@@ -1292,6 +1303,7 @@ call__fullprog_end:  ; Make fullprog_code without fullprog_end fail.
       die "$0: assert: unknown entry point: $call_main_symbol\n" if !defined($symbol_vofs{$call_main_symbol});
       substr($call_main, $call_main_ofs, 2) = pack("v", $symbol_vofs{$call_main_symbol} - ($call_main_ofs + 2 + $segment_vofs{call_main}));
     }
+    substr($init_regs, $init_regs_stop_ofs, 2) = pack("v", $symbol_vofs{"S\$TOP"}) if defined($init_regs_stop_ofs);
     if ($entry_point_mode == 2) {
       substr($call_main, 1, 2) = pack("v", $symbol_vofs{argv_bytes});
       substr($call_main, 4, 2) = pack("v", $symbol_vofs{argv_pointers});
