@@ -1,0 +1,64 @@
+		public __STK
+		extrn _small_code_:byte
+		extrn dump_reg:near
+		extrn ___st_low__:word  ; Defined by the dosmc linker.
+		.code
+
+; wcc without `-s' calls __STK at the beginning of each function called.
+; The dosmc linker generates code to call __STK at exit time with AX == 0.
+; Input: AX containing the number bytes about to be pushed to the stack
+;        (AX > 0), or AX == 0 at exit time.
+; Output: AX and FLAGS are scratch, keep everything else intact.
+__STK:		test ax, ax
+		jz @$exit_print
+		cmp word ptr [offset sp_max], 0
+		jne @$do_cur
+		; First call from main, set sp_max.
+		mov word ptr [offset sp_max], sp
+		add word ptr [offset sp_max], 6  ; (return address of __STK) + 2 (AX for __STK) + 2 (return address of main). We ignore the 0 on the top of the DOS .com program stack.
+		mov word ptr [offset sp_min], sp
+@$do_cur:	neg ax
+		add ax, sp
+		cmp ax, offset ___st_low__
+		jae @$try_min
+		mov ah, 40h
+		mov bx, 2  ; STDERR_FILENO.
+		mov cx, offset message_end - offset message
+		mov dx, offset message
+		int 21h
+		mov ax, 4c7ch  ; Exit code 124.
+		int 21h
+
+@$try_min:	cmp ax, word ptr [offset sp_min]
+		jae @$skip_min
+		mov word ptr [offset sp_min], ax
+@$skip_min:	jmp short @$done
+@$exit_print:	; Print message in the form `max st:HHHH', which can be added to
+		; the .c source as __LINKER_FLAG(stack_size__0xHHHH).
+		mov al, 'm'
+		int 29h
+		mov al, 'a'
+		int 29h
+		mov al, 'x'
+		int 29h
+		mov ax, word ptr [offset sp_max]
+		sub ax, word ptr [offset sp_min]
+		add ax, 20h  ; Add 20h bytes of stack for DOS and interrupts. See MAX_DOS_COM_SIZE in kvikdos.c why this amount.
+		push ax
+		mov ax, 's' + 't' * 256
+		call dump_reg
+		mov al, 13
+		int 29h
+		mov al, 10
+		int 29h
+@$done:		ret
+
+		.data?
+sp_max:		dw ?
+sp_min:		dw ?
+
+		.data
+message:	db 'fatal: stack overflow', 13, 10
+message_end:
+
+		end

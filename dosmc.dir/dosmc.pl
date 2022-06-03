@@ -630,7 +630,9 @@ sub load_obj($$;$) {
   }
   my %undefined_symbols = map { $_ => 1 } @extdef;
   delete $undefined_symbols{$extdef[0]};
-  die "$0: fatal: ___sd_top__ must not be defined in .obj file: $objfn\n" if exists($symbol_ofs{___sd_top__});
+  for my $symbol (qw(___sd_top__ ___st_low__)) {
+    die "$0: fatal: $symbol must not be defined in .obj file: $objfn\n" if exists($symbol_ofs{$symbol});
+  }
   for my $symbol (keys %symbol_ofs) {
     delete $undefined_symbols{$symbol};
   }
@@ -880,7 +882,7 @@ sub link_executable($$$$@) {
     @objs = @skipped_objs;
     #print STDERR "info: next round\n";
   }
-  delete $undefined_symbols{"G\$___sd_top__"};
+  delete @undefined_symbols{qw(G$___sd_top__ G$___st_low__)};
   if (%undefined_symbols) {
     my @undefined_symbols = sort keys %undefined_symbols;
     my @nlu = grep { substr($_, 0, 2) ne "G\$" } @undefined_symbols;
@@ -1073,6 +1075,7 @@ $fullprog_end = qq(
 bss_end:
 resb ((bss_end-bss_start)+(data_end-data_start)+(code_end-code_startseg))&1  ; Word-align stack, for speed.
 S\$STACK:
+G\$___st_low__:
 ; Autodetect stack size to fill data segment to 65535 bytes.
 %define stack_size ($stack_size_expr)
 times -(((stack_size-0x10)>>31)&1) resb 0  ; Assert that stack size is at least 0x10.
@@ -1112,6 +1115,7 @@ $fullprog_end = $is_com ? qq(
 bss_end:
 resb ((bss_end-bss_start)+(data_end-data_start)+(code_end-code_start+0x100))&1  ; Word-align stack, for speed.
 S\$STACK:
+G\$___st_low__:
 ; Autodetect stack size to fill main segment to almost 65535 bytes.
 %define stack_size ($stack_size_expr)
 times -(((stack_size-0x10)>>31)&1) resb 0  ; Assert that stack size is at least 0x10.
@@ -1127,6 +1131,7 @@ times -(((S\$TOP-bss_start)+(data_end-data_start)+(code_end-code_start+0x100)+3)
 ) : qq(
 bss_end:  ; Autodetect stack size to fill main segment to almost 65535 bytes.
 S\$STACK:
+G\$___st_low__:
 S\$TOP:
 G\$___sd_top__ equ 0
 call__fullprog_end:  ; Make fullprog_code without fullprog_end fail.
@@ -1172,7 +1177,9 @@ call__fullprog_end:  ; Make fullprog_code without fullprog_end fail.
         print $exef qq(push ss\npop ds\n) if $is_exe;
         $ubss .= qq(argv_bytes: resb 270\nargv_pointers: resb 130\n);
       }
-      print $exef qq(call G\$main_\nmov ah, 0x4c  ; dx: argv=NULL; EXIT, exit code in al\nint 0x21\n);
+      print $exef qq(call G\$main_\n);
+      print $exef qq(push ax\nxor ax, ax\ncall G\$__STK\npop ax\n) if exists($symbol_ofs{"G\$__STK"});  # "-sc" flag: $do_stack_check == 1.
+      print $exef qq(mov ah, 0x4c  ; dx: argv=NULL; EXIT, exit code in al\nint 0x21\n);
     } elsif ($entry_point_mode == 3) {
       print $exef qq(call G\$main_\nmov ah, 0x4c  ; EXIT, exit code in al\nint 0x21\n);
     }
@@ -1198,7 +1205,7 @@ call__fullprog_end:  ; Make fullprog_code without fullprog_end fail.
         "\x07" x !(!($is_exe and ($entry_point_mode == 2 or $lf{start_es_psp})))) :  # pop es
         $need_clear_ax ? "\x31\xC0" : "";  # xor ax, ax  ; argc=0.
     # $call_main is affected by fixups below.
-    my($call_main, $call_main_symbol, $call_main_ofs);
+    my($call_main, $call_main_symbol, $call_main_ofs, $call_stk_ofs);
     my $ubss_size = 0;  # Uncleared _BSS.
     my $add_ubss = sub {  # Adds to uncleared _BSS.
       my($symbol, $size) = @_;
@@ -1237,8 +1244,14 @@ call__fullprog_end:  ; Make fullprog_code without fullprog_end fail.
         $call_main .= "\x16\x1F" if $is_exe;  # push ss;; pop ds
       }
       # call G$main_;; mov ah, 0x4c;; int 0x21  ; dx: argv=NULL; EXIT, exit code in al
-      $call_main .= "\xE8\x00\x00\xB4\x4C\xCD\x21";
-      $call_main_symbol = "G\$main_"; $call_main_ofs = length($call_main) - 6;
+      $call_main .= "\xE8\x00\x00";
+      $call_main_symbol = "G\$main_"; $call_main_ofs = length($call_main) - 2;
+      if (exists($symbol_ofs{"G\$__STK"})) {  # "-sc" flag: $do_stack_check == 1.
+        # TODO(pts): Call __STK with AX == 0 not only when main returns (without exit).
+        $call_main .= "\x50\x31\xC0\xE8\x00\x00\x58";  # push ax;; xor ax, ax;; call G$__STK;; pop ax.
+        $call_stk_ofs = length($call_main) - 3;
+      }
+      $call_main .= "\xB4\x4C\xCD\x21";
     } elsif ($entry_point_mode == 3) {
       # call G$main_;; mov ah, 0x4c;; int 0x21  ; EXIT, exit code in al
       $call_main = "\xE8\x00\x00\xB4\x4C\xCD\x21";
@@ -1283,6 +1296,7 @@ call__fullprog_end:  ; Make fullprog_code without fullprog_end fail.
       }
     }
     $symbol_vofs{"S\$TOP"} = $vofs_top;
+    $symbol_vofs{"G\$___st_low__"} = $segment_vofs{STACK};
     $symbol_vofs{"G\$___sd_top__"} = ($vofs_top + 15) >> 4;
     if ($is_exe) {
       my $image_size = 16 + $after_text_vofs + $data_size;  # TODO(pts): Add an option to align _DATA and _BSS to word bondary.
@@ -1314,6 +1328,7 @@ call__fullprog_end:  ; Make fullprog_code without fullprog_end fail.
       die "$0: assert: unknown entry point: $call_main_symbol\n" if !defined($symbol_vofs{$call_main_symbol});
       substr($call_main, $call_main_ofs, 2) = pack("v", $symbol_vofs{$call_main_symbol} - ($call_main_ofs + 2 + $segment_vofs{call_main}));
     }
+    substr($call_main, $call_stk_ofs, 2) = pack("v", $symbol_vofs{"G\$__STK"} - ($call_stk_ofs + 2 + $segment_vofs{call_main})) if defined($call_stk_ofs);
     substr($init_regs, $init_regs_stop_ofs, 2) = pack("v", $symbol_vofs{"S\$TOP"}) if defined($init_regs_stop_ofs);
     if ($entry_point_mode == 2) {
       substr($call_main, 1, 2) = pack("v", $symbol_vofs{argv_bytes});
@@ -1795,6 +1810,7 @@ sub compiler_frontend {
   my @defines;
   my $do_add_libc = 1;
   my $link_mode = 0;
+  my $do_stack_check = 0;
 
   for my $arg (@_) {
     if ($arg eq "--" or $arg eq "-" or !length($arg)) {
@@ -1846,6 +1862,10 @@ sub compiler_frontend {
       push @defines, $arg;
     } elsif ($arg eq "-nl") {  # wcc and wcl doesn't support this flag.
       $do_add_libc = 0;
+    } elsif ($arg eq "-s") {  # Same as in wcc and wcl. Default in dosmc.
+      $do_stack_check = 0;
+    } elsif ($arg eq "-sc") {  # wcc and wcl doesn't support this flag.
+      $do_stack_check = 1;
     } elsif ($arg =~ m@\A-@) {
       push @wcc_args, $arg;
     } elsif ($arg =~ m@[.](?:c|nasm|wasm|asm|obj|o|lib)\Z(?!\n)@) {  # .o is a legacy wcc alias of .obj.
@@ -1956,7 +1976,8 @@ sub compiler_frontend {
   push @wcc_cmd, $PL if $PL eq "-pl" or $PL eq "-zs";
   # We don't pass any -bt=..., because wcc ignres all -bt...  arguments.
   # TODO(pts): Add ability to disable -we (+we ?).
-  push @wcc_cmd, "-ms", "-i=$MYDIR", "-s", "-os", "-W", "-w4", "-wx", "-we", "-wcd=202", $CPUF, "-fr", @wcc_args;
+  push @wcc_cmd, "-s" if !$do_stack_check;
+  push @wcc_cmd, "-ms", "-i=$MYDIR", "-os", "-W", "-w4", "-wx", "-we", "-wcd=202", $CPUF, "-fr", @wcc_args;
   my $wcc_cmd_size = @wcc_cmd;
   my @wasm_cmd = ('wasm', @d_args);
   push @wasm_cmd, $Q if length($Q);
