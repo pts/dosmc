@@ -259,10 +259,14 @@ my @SEGMENT_ORDER = qw(_TEXT CONST CONST2 _DATA _BSS STACK);
 my %SEGMENT_NAME_OK = map { $_ => 1 } @SEGMENT_ORDER;
 my %ASM_DATA_OP = (1 => "db", 2 => "dw", 4 => "dd", 8 => "dq");  # Constant, nasm.
 
-sub emit_nasm_segment($$$$$$) {
-  my($segment_name, $exef, $size, $data, $symbolsr, $fixupr) = @_;
+sub emit_nasm_segment($$$$$$$) {
+  my($segment_name, $exef, $size, $data, $symbolsr, $fixupr, $sbss_delta) = @_;
   return if $segment_name eq "STACK";
-  print $exef "S\$${segment_name}:\n";
+  if ($segment_name eq "_BSS" and $sbss_delta) {
+    print $exef "S\$${segment_name} equ \$-$sbss_delta\n";
+  } else {
+    print $exef "S\$${segment_name}:\n";
+  }
   print $exef "SSIZE\$${segment_name} equ $size\n";  # Not needed, just FYI.
 
   # Sort by ofs ascending.
@@ -1013,7 +1017,8 @@ sub link_executable($$$$@) {
   $does_entry_point_return = $is_data_used = $need_clear_ax = $do_clear_bss_with_code = $need_clear_df = 0 if $entry_point_mode == 4;
 
   # _DATA comes before _BSS in @SEGMENT_ORDER, move all (\0) bytes from _BSS to _DATA.
-  if (!$lf{uninitialized_bss} and !$do_clear_bss_with_code and $entry_point_mode != 4) { $ledata{_DATA} .= "\0" x $segment_sizes{_BSS}; $segment_sizes{_DATA} += $segment_sizes{_BSS}; $segment_sizes{_BSS} = 0; }
+  my $sbss_delta = 0;
+  if (!$lf{uninitialized_bss} and !$do_clear_bss_with_code and $entry_point_mode != 4) { $ledata{_DATA} .= "\0" x $segment_sizes{_BSS}; $segment_sizes{_DATA} += $sbss_delta = $segment_sizes{_BSS}; $segment_sizes{_BSS} = 0; }
   for my $segment_name (@SEGMENT_ORDER) {
     my $size = ($segment_name eq "_BSS" or $segment_name eq "STACK") ? 0 : $segment_sizes{$segment_name};
     die "$0: assert: output segment size mismatch for $segment_name\n" if length($ledata{$segment_name}) != $size;
@@ -1174,7 +1179,7 @@ call__fullprog_end:  ; Make fullprog_code without fullprog_end fail.
     for my $segment_name (@SEGMENT_ORDER) {
       print $exef qq($fullprog_data\n) if $segment_name eq "CONST";  # Double-quoted string literals.
       print $exef qq($fullprog_bss\n) if $segment_name eq "_BSS";
-      emit_nasm_segment($segment_name, $exef, $segment_sizes{$segment_name}, $ledata{$segment_name}, $segment_symbols{$segment_name}, $fixupp{$segment_name});
+      emit_nasm_segment($segment_name, $exef, $segment_sizes{$segment_name}, $ledata{$segment_name}, $segment_symbols{$segment_name}, $fixupp{$segment_name}, $sbss_delta);
     }
     print $exef qq(ubss:\n$ubss$fullprog_end\n);
   } else {  # emit_executable.
@@ -1198,7 +1203,7 @@ call__fullprog_end:  ; Make fullprog_code without fullprog_end fail.
     my $add_ubss = sub {  # Adds to uncleared _BSS.
       my($symbol, $size) = @_;
       die "$0: assert: symbol already defined\n" if exists($symbol_ofs{$symbol});
-      $symbol_ofs{$symbol} = $segment_sizes{_BSS} + $ubss_size;
+      $symbol_ofs{$symbol} = $segment_sizes{_BSS} + $ubss_size + $sbss_delta;
       push @{$segment_symbols{_BSS}}, [$symbol_ofs{$symbol}, $symbol];
       $ubss_size += $size;
     };
@@ -1264,8 +1269,8 @@ call__fullprog_end:  ; Make fullprog_code without fullprog_end fail.
     my $dgroup_vofs = $segment_vofs{CONST} = $vofs; $vofs += length($ledata{CONST});  # String literals in CONST.
     $segment_vofs{CONST2} = $vofs; $vofs += length($ledata{CONST2});
     $segment_vofs{_DATA} = $vofs; $vofs += length($ledata{_DATA});
-    $segment_vofs{_BSS} = $vofs; $vofs += $segment_sizes{_BSS} + $ubss_size;
-    $segment_vofs{STACK} = $vofs + $stack_align_size + $stack_size; $vofs += $stack_align_size + $stack_size;
+    $segment_vofs{_BSS} = $vofs - $sbss_delta; $vofs += $segment_sizes{_BSS} + $ubss_size;
+    $segment_vofs{STACK} = $vofs + $stack_align_size; $vofs += $stack_align_size + $stack_size;
     $segment_vofs{TOP} = $vofs; my $vofs_top = $vofs;  $vofs = undef;
     die "$0: assert vofs_top mismatch\n" if $vofs_top != ($is_exe ? $after_text_vofs & 15 : $after_text_vofs) + $data_size + $segment_sizes{_BSS} + $ubss_size + $stack_align_size + $stack_size;
     my %symbol_vofs;  # $symbol => $segment_vofs + $obj_ofs.
