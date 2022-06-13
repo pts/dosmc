@@ -1153,7 +1153,8 @@ call__fullprog_end:  ; Make fullprog_code without fullprog_end fail.
     } elsif ($need_clear_ax) {
       print $exef qq(db 0x31, 0xC0  ; xor ax, ax\n  ; argc=0);
     }
-    my $ubss = "";
+    my $ubss = "";  # Uncleared _BSS.
+    my $ubss_size = 0;  # Uncleared _BSS.
     if ($entry_point_mode == 1) {  # Keep these consistent with the emit_executable branch below.
       if ($is_exe and $does_entry_point_return) {
         print $exef qq(db 0xE8\ndw 0x0000+G\$_start_-\(\$+2\)  ; call G\$_start_\n);
@@ -1176,6 +1177,7 @@ call__fullprog_end:  ; Make fullprog_code without fullprog_end fail.
         print $exef qq($GETARGCV_NASM_CODE);
         print $exef qq(push ss\npop ds\n) if $is_exe;
         $ubss .= qq(argv_bytes: resb 270\nargv_pointers: resb 130\n);
+        $ubss_size += 270 + 130;
       }
       print $exef qq(call G\$main_\n);
       print $exef qq(push ax\nxor ax, ax\ncall G\$__STK\npop ax\n) if exists($symbol_ofs{"G\$__STK"});  # "-sc" flag: $do_stack_check == 1.
@@ -1189,6 +1191,7 @@ call__fullprog_end:  ; Make fullprog_code without fullprog_end fail.
       emit_nasm_segment($segment_name, $exef, $segment_sizes{$segment_name}, $ledata{$segment_name}, $segment_symbols{$segment_name}, $fixupp{$segment_name}, $sbss_delta);
     }
     print $exef qq(ubss:\n$ubss$fullprog_end\n);
+    $segment_sizes{_BSS} += $ubss_size;
   } else {  # emit_executable.
     my $init_regs = "";
     $init_regs .= "\x16\x1F" if $is_exe and $is_data_used;  # push ss;; pop ds.
@@ -1204,15 +1207,15 @@ call__fullprog_end:  ; Make fullprog_code without fullprog_end fail.
         pack("a1va1va4", "\xBF", 0, "\xB9", ($segment_sizes{_BSS} + 1) >> 1, "\x31\xC0\xF3\xAB") .  # Affected by fixups below. mov di, bss_start;; mov cx, ubss-bss_start+1)>>1;; xor ax, ax;; rep stosw
         "\x07" x !(!($is_exe and ($entry_point_mode == 2 or $lf{start_es_psp})))) :  # pop es
         $need_clear_ax ? "\x31\xC0" : "";  # xor ax, ax  ; argc=0.
+    # Now we can increase $segment_sizes{_BSS}, because we've already used the cleared size in $clear_bss.
     # $call_main is affected by fixups below.
     my($call_main, $call_main_symbol, $call_main_ofs, $call_stk_ofs);
-    my $ubss_size = 0;  # Uncleared _BSS.
     my $add_ubss = sub {  # Adds to uncleared _BSS.
       my($symbol, $size) = @_;
       die "$0: assert: symbol already defined\n" if exists($symbol_ofs{$symbol});
-      $symbol_ofs{$symbol} = $segment_sizes{_BSS} + $ubss_size + $sbss_delta;
+      $symbol_ofs{$symbol} = $segment_sizes{_BSS} + $sbss_delta;
       push @{$segment_symbols{_BSS}}, [$symbol_ofs{$symbol}, $symbol];
-      $ubss_size += $size;
+      $segment_sizes{_BSS} += $size;
     };
     if ($entry_point_mode == 1) {  # Keep these consistent with the emit_nasm branch above.
       if ($is_exe and $does_entry_point_return) {
@@ -1265,11 +1268,11 @@ call__fullprog_end:  ; Make fullprog_code without fullprog_end fail.
     my $data_size = $segment_sizes{CONST} + $segment_sizes{CONST2} + $segment_sizes{_DATA};
     my $stack_size = 0; my $stack_align_size = 0;
     if ($is_com or $is_exe) {
-      die "$0: fatal: data too large\n" if $data_size + $segment_sizes{_BSS} + $ubss_size > 65535;  # !! Allow 65536, also in nasm.
+      die "$0: fatal: data too large\n" if $data_size + $segment_sizes{_BSS} > 65535;  # !! Allow 65536, also in nasm.
       die "$0: fatal: code too large\n" if $after_text_vofs > 65535;  # !! Allow 65536, also in nasm.
-      die "$0: fatal: code+data too large for .com\n" if !$is_exe and $after_text_vofs + $data_size + $segment_sizes{_BSS} + $ubss_size > 65535;
-      $stack_align_size = ($after_text_vofs + $data_size + $segment_sizes{_BSS} + $ubss_size) & 1;
-      my $stack_size_auto = 0x10000 - ($data_size + $segment_sizes{_BSS} + $ubss_size + ($is_exe ? $after_text_vofs & 15 : 4 + $after_text_vofs) + $stack_align_size);
+      die "$0: fatal: code+data too large for .com\n" if !$is_exe and $after_text_vofs + $data_size + $segment_sizes{_BSS} > 65535;
+      $stack_align_size = ($after_text_vofs + $data_size + $segment_sizes{_BSS}) & 1;
+      my $stack_size_auto = 0x10000 - ($data_size + $segment_sizes{_BSS} + ($is_exe ? $after_text_vofs & 15 : 4 + $after_text_vofs) + $stack_align_size);
       $stack_size = ($segment_sizes{STACK} or $stack_size_auto);  # If STACK segment specified, use its size, otherwise fill stack to make DGROUP ~64 KiB long.
       die "$0: fatal: data+stack too small (code and/or data may be too large)\n" if $stack_size < 0x10;  # Smaller values may also break, depending on the DOS version and interrupt stack depth.
     }
@@ -1282,10 +1285,10 @@ call__fullprog_end:  ; Make fullprog_code without fullprog_end fail.
     my $dgroup_vofs = $segment_vofs{CONST} = $vofs; $vofs += length($ledata{CONST});  # String literals in CONST.
     $segment_vofs{CONST2} = $vofs; $vofs += length($ledata{CONST2});
     $segment_vofs{_DATA} = $vofs; $vofs += length($ledata{_DATA});
-    $segment_vofs{_BSS} = $vofs - $sbss_delta; $vofs += $segment_sizes{_BSS} + $ubss_size;
+    $segment_vofs{_BSS} = $vofs - $sbss_delta; $vofs += $segment_sizes{_BSS};
     $segment_vofs{STACK} = $vofs + $stack_align_size; $vofs += $stack_align_size + $stack_size;
     $segment_vofs{TOP} = $vofs; my $vofs_top = $vofs;  $vofs = undef;
-    die "$0: assert vofs_top mismatch\n" if $vofs_top != ($is_exe ? $after_text_vofs & 15 : $after_text_vofs) + $data_size + $segment_sizes{_BSS} + $ubss_size + $stack_align_size + $stack_size;
+    die "$0: assert vofs_top mismatch\n" if $vofs_top != ($is_exe ? $after_text_vofs & 15 : $after_text_vofs) + $data_size + $segment_sizes{_BSS} + $stack_align_size + $stack_size;
     my %symbol_vofs;  # $symbol => $segment_vofs + $obj_ofs.
     for my $segment_name (keys %segment_symbols) {
       my $this_segment_vofs = $segment_vofs{$segment_name};
@@ -1306,7 +1309,7 @@ call__fullprog_end:  ; Make fullprog_code without fullprog_end fail.
       #   == (($image_size + 511) >> 9 << 9) - 16 + ($minalloc << 4),
       #   because $nblocks is ($image_size + 511) >> 9 and $hdrsize is 1.
       # We need this many bytes: N ==
-      #   == $after_text_vofs + $data_size + $segment_sizes{_BSS} + $ubss_size + $stack_align_size + $stack_size ==
+      #   == $after_text_vofs + $data_size + $segment_sizes{_BSS} + $stack_align_size + $stack_size ==
       #   == $image_size - 16 + $nobits_size.
       # To make it fit, we must have R >= N:
       #   (($image_size + 511) >> 9 << 9) - 16 + ($minalloc << 4) >= $image_size - 16 + $nobits_size.
