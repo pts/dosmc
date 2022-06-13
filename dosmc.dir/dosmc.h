@@ -59,6 +59,14 @@ extern char __sd_top__[];
 #define __MOV_AX_PSP_MCB__ "mov ax, cs" "sub ax, 11h"
 #endif
 
+#define _FP_OFF(__p) ((unsigned)(__p))
+#define _FP_SEG(__p) ((unsigned)((unsigned long)(void __far*)(__p) >> 16))
+/* Make a far pointer from segment and offset. */
+#define _MK_FP(__s,__o) (((unsigned short)(__s)):>((void __near *)(__o)))
+#define FP_OFF _FP_OFF
+#define FP_SEG _FP_SEG
+#define MK_FP  _MK_FP
+
 /* Writes a $-delimited string to stdout. You may want to create msg with
  * STRING_WITHOUT_NUL to save 1 byte.
  *
