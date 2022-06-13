@@ -748,8 +748,8 @@ xchg ax, bp  ; ax := bp.
 shr ax, 1  ; Set ax to argc, it's final return value.
 };
 
-sub link_executable($$$$@) {
-  my($link_mode, $exefn, $target, $CPUF) = splice(@_, 0, 4);  # Keep .obj files in @_.
+sub link_executable($$$$$@) {
+  my($link_mode, $exefn, $target, $CPUF, $Q) = splice(@_, 0, 5);  # Keep .obj files in @_.
   local $0 = "dosmc-linker-$target" . ($link_mode == 2 ? "-justload" : $link_mode ? "-nasm" : "");
   die "$0: assert: unknown target: $target\n" if $target ne "exe" and $target ne "com" and $target ne "bin";
   my $is_exe = $target eq "exe";
@@ -1357,6 +1357,22 @@ call__fullprog_end:  ; Make fullprog_code without fullprog_end fail.
       print $exef $data;
     }
   }
+  if (!length($Q)) {
+    print STDERR "info: segment byte sizes: PSP=256 " . join(" ", map { "$_=$segment_sizes{$_}" } @SEGMENT_ORDER) . "\n";
+    my $segment_sum_size = 0;
+    for my $segment_name (@SEGMENT_ORDER) {
+      $segment_sum_size += $segment_sizes{$segment_name};
+    }
+    # This formula is accurate for kvikdos; other DOS implementations
+    # usually have more overhead, thus smaller $max_heap_size (by a
+    # constant).
+    my $max_heap_size = (0xa0000  # 640 KiB.
+         - 0x1000  # 4 KiB for the interrupt vector table, BIOS data area, environment and PSP MCB.
+         - 0x100  # 256 bytes for the PSP.
+         - ($segment_sum_size + 0xf) & ~0xf);
+    my $max_heap_para = $max_heap_size >> 4;
+    print STDERR "info: maximum heap size: $max_heap_size bytes == $max_heap_para (== " . sprintf("0x%0x", $max_heap_para) . ") paragraphs\n";
+  }
   };  # End of eval block.
   close($exef) if $exef;
   if ($@) { print STDERR $@; exit(4 + $link_mode); }
@@ -1799,7 +1815,7 @@ segment %1
 sub print_and_link_executable($$$$$@) {
   my($link_mode, $exefn, $target2, $CPUF, $Q, @objfns) = @_;
   print_command("//link", "-bt=$target2", $CPUF, ($link_mode == 2 ? "-cldl" : $link_mode ? "-cn" : "-ce"),  "-fe=$exefn", @objfns) if !length($Q);
-  link_executable($link_mode, $exefn, $target2, $CPUF, @objfns);
+  link_executable($link_mode, $exefn, $target2, $CPUF, $Q, @objfns);
 }
 
 sub compiler_frontend {
