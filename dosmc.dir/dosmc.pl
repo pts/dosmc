@@ -1276,6 +1276,13 @@ call__fullprog_end:  ; Make fullprog_code without fullprog_end fail.
       $stack_size = ($segment_sizes{STACK} or $stack_size_auto);  # If STACK segment specified, use its size, otherwise fill stack to make DGROUP ~64 KiB long.
       die "$0: fatal: data+stack too small (code and/or data may be too large)\n" if $stack_size < 0x10;  # Smaller values may also break, depending on the DOS version and interrupt stack depth.
     }
+    $segment_sizes{STACK} = $stack_align_size + $stack_size;
+    $segment_sizes{_TEXT} = $vofs_base - ($is_com ? 0x100 : 0) + length($call_main) + length($ledata{_TEXT});
+    $segment_sizes{CONST} = length($ledata{CONST});
+    $segment_sizes{CONST2} = length($ledata{CONST2});
+    $segment_sizes{_DATA} = length($ledata{_DATA});
+    #die "$0: assert: bad CONST size\n" if length($ledata{CONST}) != $segment_sizes{CONST};
+    #die "$0: assert: bad CONST2 size\n" if length($ledata{CONST2}) != $segment_sizes{CONST2};
     my %segment_vofs;
     my $vofs = $vofs_base;
     $segment_vofs{call_main} = $vofs; $vofs += length($call_main);  # For the relocation below.
@@ -1286,9 +1293,9 @@ call__fullprog_end:  ; Make fullprog_code without fullprog_end fail.
     $segment_vofs{CONST2} = $vofs; $vofs += length($ledata{CONST2});
     $segment_vofs{_DATA} = $vofs; $vofs += length($ledata{_DATA});
     $segment_vofs{_BSS} = $vofs - $sbss_delta; $vofs += $segment_sizes{_BSS};
-    $segment_vofs{STACK} = $vofs + $stack_align_size; $vofs += $stack_align_size + $stack_size;
+    $segment_vofs{STACK} = $vofs + $stack_align_size; $vofs += $segment_sizes{STACK};
     $segment_vofs{TOP} = $vofs; my $vofs_top = $vofs;  $vofs = undef;
-    die "$0: assert vofs_top mismatch\n" if $vofs_top != ($is_exe ? $after_text_vofs & 15 : $after_text_vofs) + $data_size + $segment_sizes{_BSS} + $stack_align_size + $stack_size;
+    die "$0: assert vofs_top mismatch\n" if $vofs_top != ($is_exe ? $after_text_vofs & 15 : $after_text_vofs) + $data_size + $segment_sizes{_BSS} + $segment_sizes{STACK};
     my %symbol_vofs;  # $symbol => $segment_vofs + $obj_ofs.
     for my $segment_name (keys %segment_symbols) {
       my $this_segment_vofs = $segment_vofs{$segment_name};
@@ -1300,7 +1307,14 @@ call__fullprog_end:  ; Make fullprog_code without fullprog_end fail.
     }
     $symbol_vofs{"S\$TOP"} = $vofs_top;
     $symbol_vofs{"G\$___st_low__"} = $segment_vofs{STACK};
-    $symbol_vofs{"G\$___sd_top__"} = ($vofs_top + 15) >> 4;
+    my $sd_top = ($vofs_top + 15) >> 4;
+    $symbol_vofs{"G\$___sd_top__"} = $sd_top;
+    if (!length($Q)) {
+      my $sdc_top = $vofs_top;
+      $sdc_top += $after_text_vofs - ($after_text_vofs & 15) if $is_exe;
+      $sdc_top = ($sdc_top + 15) >> 4;
+      print STDERR "info: vofs_top=$vofs_top ds+sd_top=ds+$sd_top=ds+" . sprintf("0x%04x", $sd_top). "=cs+$sdc_top=cs+" . sprintf("0x%04x", $sdc_top) . "\n";
+    }
     if ($is_exe) {
       my $image_size = 16 + $after_text_vofs + $data_size;  # TODO(pts): Add an option to align _DATA and _BSS to word bondary.
       my $nobits_size = $vofs_top - $data_size - $dgroup_vofs;
@@ -1358,20 +1372,23 @@ call__fullprog_end:  ; Make fullprog_code without fullprog_end fail.
     }
   }
   if (!length($Q)) {
-    print STDERR "info: segment byte sizes: PSP=256 " . join(" ", map { "$_=$segment_sizes{$_}" } @SEGMENT_ORDER) . "\n";
     my $segment_sum_size = 0;
     for my $segment_name (@SEGMENT_ORDER) {
       $segment_sum_size += $segment_sizes{$segment_name};
     }
+    # values(%segment_sizes) are slightly incorrect with NASM ($link_mode),
+    # mostly because of size of generated code.
+    my $approximate_msg = $link_mode ? "approximate " : "";
+    print STDERR "info: ${approximate_msg}segment byte sizes: " . join(" ", map { "$_=$segment_sizes{$_}" } @SEGMENT_ORDER) . " total=$segment_sum_size\n";
     # This formula is accurate for kvikdos; other DOS implementations
     # usually have more overhead, thus smaller $max_heap_size (by a
     # constant).
     my $max_heap_size = (0xa0000  # 640 KiB.
          - 0x1000  # 4 KiB for the interrupt vector table, BIOS data area, environment and PSP MCB.
          - 0x100  # 256 bytes for the PSP.
-         - ($segment_sum_size + 0xf) & ~0xf);
+         - (($segment_sum_size + 0xf) & ~0xf));
     my $max_heap_para = $max_heap_size >> 4;
-    print STDERR "info: maximum heap size: $max_heap_size bytes == $max_heap_para (== " . sprintf("0x%0x", $max_heap_para) . ") paragraphs\n";
+    print STDERR "info: ${approximate_msg}maximum heap size: $max_heap_size bytes == $max_heap_para (== " . sprintf("0x%0x", $max_heap_para) . ") paragraphs\n";
   }
   };  # End of eval block.
   close($exef) if $exef;
