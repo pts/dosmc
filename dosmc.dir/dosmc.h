@@ -127,12 +127,15 @@ static size_t strlen_inline(const char *s);
 "inc si" \
 "inc ax" \
 "jnc again" \
+value [ ax ] \
 parm [ si ] \
 modify [ si ];
 
 int memcmp(const void *s1, const void *s2, size_t n);
 static int memcmp_inline(const void *s1, const void *s2, size_t n);
 #pragma aux memcmp_inline = \
+"push ds" \
+"pop es" \
 "xor ax, ax" \
 "repz cmpsb" \
 "je @$done" \
@@ -140,6 +143,7 @@ static int memcmp_inline(const void *s1, const void *s2, size_t n);
 "jnc @$done" \
 "neg ax" \
 "@$done:" \
+value [ ax ] \
 parm [ si ] [ di ] [ cx] \
 modify [ si di cx ];
 
@@ -147,6 +151,8 @@ int strcmp(const char *s1, const char *s2);
 int strcmp_far(const char far *s1, const char far *s2);  /* Assumes that offset in s1 and s2 doesn't wrap around. */
 static int strcmp_inline(const char *s1, const char *s2);
 #pragma aux strcmp_inline = \
+"push ds" \
+"pop es" \
 "xor ax, ax" \
 "mov cx, -1" \
 "repz cmpsb" \
@@ -155,6 +161,7 @@ static int strcmp_inline(const char *s1, const char *s2);
 "jnc @$done" \
 "neg ax" \
 "@$done:" \
+value [ ax ] \
 parm [ si ] [ di ] \
 modify [ si di cx ];
 
@@ -163,12 +170,15 @@ char *strcpy(char *dest, const char *src);
 char far *strcpy_far(char far *dest, const char far *src);  /* Assumes that offset in dest and src don't wrap around. */
 static char *strcpy_inline(char *dest, const char *src);
 #pragma aux strcpy_inline = \
+"push ds" \
+"pop es" \
 "push di" \
 "@$again: lodsb" \
 "stosb" \
 "cmp al, 0" \
 "jne @$again" \
 "pop ax" \
+value [ ax ] \
 parm [ di ] [ si ] \
 modify [ si di ];
 
