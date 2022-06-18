@@ -182,6 +182,35 @@ value [ ax ] \
 parm [ di ] [ si ] \
 modify [ si di ];
 
+static void *memcpy_inline(void *dest, const void *src, size_t n);
+#pragma aux memcpy_inline = \
+"push ds" \
+"pop es" \
+"push di" \
+"rep movsb" \
+"pop ax" \
+value [ ax ] \
+parm [ di ] [ si ] [ cx ] \
+modify [ si di cx ];
+
+static void memcpy_void_inline(void *dest, const void *src, size_t n);
+#pragma aux memcpy_void_inline = \
+"push ds" \
+"pop es" \
+"rep movsb" \
+parm [ di ] [ si ] [ cx ] \
+modify [ si di cx ];
+
+/* Returns dest + n. */
+static void *memcpy_newdest_inline(void *dest, const void *src, size_t n);
+#pragma aux memcpy_newdest_inline = \
+"push ds" \
+"pop es" \
+"rep movsb" \
+value [ di ] \
+parm [ di ] [ si ] [ cx ] \
+modify [ si cx ];
+
 char *strcat(char *dest, const char *src);
 
 int tolower(int c);
