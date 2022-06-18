@@ -158,6 +158,7 @@ static int strcmp_inline(const char *s1, const char *s2);
 parm [ si ] [ di ] \
 modify [ si di cx ];
 
+void *memcpy(void *dest, const void *src, size_t n);
 char *strcpy(char *dest, const char *src);
 char far *strcpy_far(char far *dest, const char far *src);  /* Assumes that offset in dest and src don't wrap around. */
 static char *strcpy_inline(char *dest, const char *src);

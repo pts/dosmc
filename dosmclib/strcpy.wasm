@@ -3,7 +3,7 @@
 		.code
 
 ; char *strcpy(char *dest, const char *src);
-; Optimized for size. AX == s1, DX == s2.
+; Optimized for size. AX == dest, DX == src.
 ; TODO(pts): Check the Watcom libc if it is any shorter.
 strcpy_:	push di
 		push ds

@@ -1,0 +1,21 @@
+		public memcpy_
+		extrn _small_code_:byte
+		.code
+
+; void *memcpy(void *dest, const void *src, size_t n);
+; Optimized for size. AX == dest, DX == src, BX == n.
+memcpy_:	push di
+		push ds
+		pop es
+		xchg si, dx
+		xchg di, ax		; DI := dest; AX := junk.
+		xchg cx, bx
+		push di
+		rep movsb
+		pop ax			; Will return dest.
+		xchg cx, bx		; Restore CX.
+		xchg si, dx		; Restore SI.
+		pop di
+		ret
+
+		end
