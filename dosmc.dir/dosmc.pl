@@ -772,18 +772,29 @@ sub link_executable($$$$$@) {
   my %duplicate_symbols;
   my $text_vofs_for_bin;
   my $text_vofs_ref = ($is_com or $is_exe) ? undef : \$text_vofs_for_bin;
-  #print STDERR "info: first round\n";
-  while (@_) {  # Next round.
+  #print STDERR "info: first round of loading\n";
+  while (@_) {  # Next round. Each round processes objs in all .obj and .lib files in @_.
     my @skipped_objs;
     my $skipped_objs_base = 0;
     my $obji = 0;
     my $used_objs_base = 0;
     my $obji_base = 0;
-    while (1) {  # Process next .obj within this round.
-      if ($obji == @objs) {
+    while (1) {  # Process next obj within this round.
+      if ($obji == @objs) {  # Load objs from the .obj or .lib file of the current round. This is done only in the first round.
         last if $objfni == @_;
         my $load_obj_count = @objs;
+        #print STDERR "info: loading objs from $_[$objfni]\n";
         push @objs, load_obj($_[$objfni++], $objli, $text_vofs_ref), undef;
+        #for (my $i = $load_obj_count; $i < $#objs; ++$i) {
+        #  print STDERR "info: loaded: $objs[$i]\n";
+        #  my $obj_segment_symbols = $objs[$i][1];
+        #  for my $segment_name (@SEGMENT_ORDER) {
+        #    for my $pair (@{$obj_segment_symbols->{$segment_name}}) {
+        #      my($ofs, $symbol) = @$pair;
+        #      print STDERR "info: loaded symbol: $symbol\n";
+        #    }
+        #  }
+        #}
         $load_obj_count = @objs - $load_obj_count;
         $objli += $load_obj_count;
         #print STDERR "info: loaded @{[$load_obj_count-1]} objs from $_[$objfni-1]\n";
@@ -816,6 +827,12 @@ sub link_executable($$$$$@) {
         }
       }
       #print STDERR "info: used obj\n";
+      #for my $segment_name (@SEGMENT_ORDER) {
+      #  for my $pair (@{$obj_segment_symbols->{$segment_name}}) {
+      #    my($ofs, $symbol) = @$pair;
+      #    print STDERR "info: adding symbol: $symbol\n";
+      #  }
+      #}
       ++$used_objs_base;
       # Helpfully added by wcc if there is main(...) with nonzero arguments.
       $do_use_argc = 1 if exists($obj_undefined_symbols->{"G\$__argc"});
@@ -880,8 +897,9 @@ sub link_executable($$$$$@) {
     }
     last if @skipped_objs == @objs or !%undefined_symbols;
     @objs = @skipped_objs;
-    #print STDERR "info: next round\n";
+    #print STDERR "info: next round of loading\n";
   }
+  #print STDERR "info: done loading\n";
   delete @undefined_symbols{qw(G$___sd_top__ G$___st_low__)};
   if (%undefined_symbols) {
     my @undefined_symbols = sort keys %undefined_symbols;
