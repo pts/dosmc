@@ -12,6 +12,9 @@ Download on Linux and macOS:
   $ cd dosmc
   $ ./dosmc --prepare  # Download executables, set up Docker image if needed.
 
+The --perpare command above also compiles the C library (libc) to
+dosmc.dir/dosmc.lib from its sources in dosmclib/ .
+
 Alternatively, if you don't have Git installed, you can download and extract
 https://github.com/pts/dosmc/archive/master.zip instead.
 
@@ -58,9 +61,12 @@ dosmc limitations:
   size of code + data + stack is ~63 KiB), and small for .exe executables
   (maximum size of code is ~64 KiB, maximum size of data + stack is ~64
   KiB).
-* The supplied C library (libc) is very limited, currently it doesn't
-  contain much more than getchar and putchar. For most functionality,
-  inline assembly with DOS calls (int 21h) should be used.
+* The supplied C library (libc) is a bit limited, it contains functions for
+  unbuffered file I/O (e.g. open(), read(), write(), lseek(), close()),
+  string manipulation (e.g. strcmp()), character classes (e.g. isspace())
+  and some control (e.g. exit()). It doesn't contain printf() or malloc().
+  For most additional functionality, inline assembly with DOS calls (int
+  21h) should be used.
 * There is no convenient way yet to get the command-line arguments and the
   environment.
 * There is no stack overflow detector.
