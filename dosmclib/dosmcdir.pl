@@ -11,7 +11,7 @@ use integer; use strict;
 my $dir = $INC[0];
 my $d;
 die "$0: fatal: opendir: $dir: $!\n" if !opendir($d, $dir);
-my @sources = map { "$dir/$_" } grep { m@[.]wasm\Z(?!\n)@ } readdir($d);
+my @sources = sort map { "$dir/$_" } grep { m@[.]wasm\Z(?!\n)@ } readdir($d);
 die "$0: fatal: closedir: $dir: $!\n" if !closedir($d);
 dosmc("-nq", "-cl", "-fo=$dir/../dosmc.dir/dosmc.lib", @sources);
 dosmc("-nq", "-cldl");  # Check that the internal linker can load dosmc.lib.
