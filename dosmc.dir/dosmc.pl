@@ -611,7 +611,7 @@ sub load_obj($$;$) {
   if ($code_type) {  # Complicated.
     $has_string_instructions = 1 if $ledata{_TEXT} =~ m@$STR_INST_80286_RE@o;  # Conservative.
   } else {
-    $has_string_instructions = 1 if length($code_type);
+    $has_string_instructions = 1 if length($code_type);  # I.e. $code_type eq "0".
   }
   $segment_sizes{_TEXT} -= $text_vofs if defined($segment_sizes{_TEXT});
   for my $segment_name (@SEGMENT_ORDER) {
@@ -646,6 +646,49 @@ sub load_obj($$;$) {
   close($f) if $f;
   die $@ if $@;
   @objs
+}
+
+sub write_map($$$$$$$$) {
+  my($mapfn, $target, $fexefn, $symbol_vofs, $segment_symbols, $vofs_entry, $fofs_delta, $vofs_base) = @_;
+  my $mapf;
+  eval {
+  die "$0: fatal: cannot open for writing: $mapfn\n" if !open($mapf, ">", $mapfn);
+  print $mapf "dosmc map file\n";
+  print $mapf "executable format=$target filename=$fexefn\n";
+  $symbol_vofs->{"S\$INIT"} = $vofs_entry;
+  $symbol_vofs->{header} = $fofs_delta;  # Negative (-16) for $is_exe, so that it gets `fofs=0'.
+  $symbol_vofs->{entry} = $vofs_entry;  # For the map dump below.
+  $symbol_vofs->{call_main} = $vofs_base;  # For the map dump below.
+  $segment_symbols->{INIT} = [];
+  for my $symbol (qw(header entry call_main)) {
+    push @{$segment_symbols->{INIT}}, [$symbol_vofs->{$symbol} - $vofs_entry, $symbol];
+  }
+  my %all_vofs = %$symbol_vofs;
+  for my $segment_name ("INIT", @SEGMENT_ORDER, "TOP") {
+    delete $all_vofs{"S\$${segment_name}"};
+    my $segment_vofs = $symbol_vofs->{"S\$${segment_name}"};
+    my $do_fofs = ($segment_name ne "STACK" and $segment_name ne "TOP");
+    print $mapf "segment segment=$segment_name vofs=0x" . sprintf("%x", $segment_vofs) . ($do_fofs ? sprintf(" fofs=0x%x", $segment_vofs - $fofs_delta) : "") . "\n";
+    $do_fofs = 0 if $segment_name eq "_BSS";
+    next if !exists($segment_symbols->{$segment_name});  # E.g. for "TOP".
+    for my $pair (@{$segment_symbols->{$segment_name}}) {
+      my($ofs, $symbol) = @$pair;
+      my $vofs = $symbol_vofs->{$symbol};
+      delete $all_vofs{$symbol};
+      die "$0: fatal: missing vofs for symbol $symbol in segment $segment_name\n" if !defined($vofs);
+      # vofs= in-memory offset; ofs= in-segment offset; fofs= in-file offset.
+      print $mapf "symbol segment=$segment_name symbol=$symbol ofs=0x" . sprintf("%x", $ofs) . " vofs=0x" . sprintf("%x", $vofs) . ($do_fofs ? sprintf(" fofs=0x%x", $vofs - $fofs_delta) : "") . "\n";
+    }
+  }
+  print $mapf "segment outside\n";
+  for my $symbol (sort(keys(%all_vofs))) {  # Typically G$___sd_top__ and G$___st_low__.
+    my $vofs = $all_vofs{$symbol};
+    print $mapf "symbol segment= symbol=$symbol vofs=0x" . sprintf("%x", $vofs) . " fofs=0x" . sprintf("%x", $vofs - $fofs_delta) . "\n";
+  }
+  print $mapf "end of dosmc map file\n";
+  };  # End of eval block.
+  close($mapf) if $mapf;  # TODO(pts): Flush and check errors in each file write and close.
+  die $@ if $@;
 }
 
 # Assembly code to populate and return argc (ax) and argv (dx).
@@ -748,8 +791,8 @@ xchg ax, bp  ; ax := bp.
 shr ax, 1  ; Set ax to argc, it's final return value.
 };
 
-sub link_executable($$$$$@) {
-  my($link_mode, $exefn, $target, $CPUF, $Q) = splice(@_, 0, 5);  # Keep .obj files in @_.
+sub link_executable($$$$$$$@) {
+  my($link_mode, $exefn, $fexefn, $mapfn, $target, $CPUF, $Q) = splice(@_, 0, 7);  # Keep .obj files in @_.
   local $0 = "dosmc-linker-$target" . ($link_mode == 2 ? "-justload" : $link_mode ? "-nasm" : "");
   die "$0: assert: unknown target: $target\n" if $target ne "exe" and $target ne "com" and $target ne "bin";
   my $is_exe = $target eq "exe";
@@ -1280,7 +1323,9 @@ call__fullprog_end:  ; Make fullprog_code without fullprog_end fail.
     } else {
       $call_main = "";
     }
-    my $vofs_base = ($is_exe ? 8 : $is_com ? 0x100 : $text_vofs_for_bin) + length($init_regs) + length($clear_bss);
+    my $fofs_delta = ($is_exe ? -16 : $is_com ? 0x100 : $text_vofs_for_bin);
+    my $vofs_entry = ($is_exe ? 8 : $is_com ? 0x100 : $text_vofs_for_bin);
+    my $vofs_base = $vofs_entry + length($init_regs) + length($clear_bss);
     my $after_text_vofs = $vofs_base + length($call_main) + length($ledata{_TEXT});
     die "$0: assert: _TEXT segment size mismatch\n" if length($ledata{_TEXT}) != $segment_sizes{_TEXT};
     my $data_size = $segment_sizes{CONST} + $segment_sizes{CONST2} + $segment_sizes{_DATA};
@@ -1303,7 +1348,7 @@ call__fullprog_end:  ; Make fullprog_code without fullprog_end fail.
     #die "$0: assert: bad CONST2 size\n" if length($ledata{CONST2}) != $segment_sizes{CONST2};
     my %segment_vofs;
     my $vofs = $vofs_base;
-    $segment_vofs{call_main} = $vofs; $vofs += length($call_main);  # For the relocation below.
+    $segment_vofs{INIT} = $vofs; $vofs += length($call_main);
     $segment_vofs{_TEXT} = $vofs; $vofs += length($ledata{_TEXT});
     die "$0: assert: after_text_vofs mismatch\n" if $vofs != $after_text_vofs;
     $vofs &= 15 if $is_exe;
@@ -1327,12 +1372,17 @@ call__fullprog_end:  ; Make fullprog_code without fullprog_end fail.
     $symbol_vofs{"G\$___st_low__"} = $segment_vofs{STACK};
     my $sd_top = ($vofs_top + 15) >> 4;
     $symbol_vofs{"G\$___sd_top__"} = $sd_top;
-    if (!length($Q)) {
+
+    if (!length($Q)) {  # Print some info.
       my $sdc_top = $vofs_top;
       $sdc_top += $after_text_vofs - ($after_text_vofs & 15) if $is_exe;
       $sdc_top = ($sdc_top + 15) >> 4;
       print STDERR "info: vofs_top=$vofs_top ds+sd_top=ds+$sd_top=ds+" . sprintf("0x%04x", $sd_top). "=cs+$sdc_top=cs+" . sprintf("0x%04x", $sdc_top) . "\n";
+      if (defined($mapfn) and length($mapfn)) {
+        write_map($mapfn, $target, $exefn, \%symbol_vofs, \%segment_symbols, $vofs_entry, $fofs_delta, $vofs_base);
+      }
     }
+
     if ($is_exe) {
       my $image_size = 16 + $after_text_vofs + $data_size;  # TODO(pts): Add an option to align _DATA and _BSS to word bondary.
       my $nobits_size = $vofs_top - $data_size - $dgroup_vofs;
@@ -1361,9 +1411,9 @@ call__fullprog_end:  ; Make fullprog_code without fullprog_end fail.
     substr($clear_bss, 1 + ($is_exe ? 2 : 0) + (($is_exe and $lf{start_es_psp}) ? 1 : 0), 2) = pack("v", $segment_vofs{_BSS}) if length($clear_bss) >= 6;
     if (defined $call_main_ofs) {
       die "$0: assert: unknown entry point: $call_main_symbol\n" if !defined($symbol_vofs{$call_main_symbol});
-      substr($call_main, $call_main_ofs, 2) = pack("v", $symbol_vofs{$call_main_symbol} - ($call_main_ofs + 2 + $segment_vofs{call_main}));
+      substr($call_main, $call_main_ofs, 2) = pack("v", $symbol_vofs{$call_main_symbol} - ($call_main_ofs + 2 + $segment_vofs{INIT}));
     }
-    substr($call_main, $call_stk_ofs, 2) = pack("v", $symbol_vofs{"G\$__STK"} - ($call_stk_ofs + 2 + $segment_vofs{call_main})) if defined($call_stk_ofs);
+    substr($call_main, $call_stk_ofs, 2) = pack("v", $symbol_vofs{"G\$__STK"} - ($call_stk_ofs + 2 + $segment_vofs{INIT})) if defined($call_stk_ofs);
     substr($init_regs, $init_regs_stop_ofs, 2) = pack("v", $symbol_vofs{"S\$TOP"}) if defined($init_regs_stop_ofs);
     if ($entry_point_mode == 2) {
       substr($call_main, 1, 2) = pack("v", $symbol_vofs{argv_bytes});
@@ -1397,6 +1447,7 @@ call__fullprog_end:  ; Make fullprog_code without fullprog_end fail.
     # values(%segment_sizes) are slightly incorrect with NASM ($link_mode),
     # mostly because of size of generated code.
     my $approximate_msg = $link_mode ? "approximate " : "";
+    # TODO(pts): Add this info to the map file ($mapfn).
     print STDERR "info: ${approximate_msg}segment byte sizes: " . join(" ", map { "$_=$segment_sizes{$_}" } @SEGMENT_ORDER) . " total=$segment_sum_size\n";
     # This formula is accurate for kvikdos; other DOS implementations
     # usually have more overhead, thus smaller $max_heap_size (by a
@@ -1847,10 +1898,11 @@ segment %1
 
 );  #`
 
-sub print_and_link_executable($$$$$@) {
-  my($link_mode, $exefn, $target2, $CPUF, $Q, @objfns) = @_;
-  print_command("//link", "-bt=$target2", $CPUF, ($link_mode == 2 ? "-cldl" : $link_mode ? "-cn" : "-ce"),  "-fe=$exefn", @objfns) if !length($Q);
-  link_executable($link_mode, $exefn, $target2, $CPUF, $Q, @objfns);
+sub print_and_link_executable($$$$$$$@) {
+  my($link_mode, $exefn, $fexefn, $mapfn, $target2, $CPUF, $Q, @objfns) = @_;
+  my @mapargs = ((defined($mapfn) and length($mapfn)) ? ("-fm=$mapfn") : ());
+  print_command("//link", "-bt=$target2", $CPUF, ($link_mode == 2 ? "-cldl" : $link_mode ? "-cn" : "-ce"), "-fe=$exefn", @mapargs, @objfns) if !length($Q);
+  link_executable($link_mode, $exefn, $fexefn, $mapfn, $target2, $CPUF, $Q, @objfns);
 }
 
 sub compiler_frontend {
@@ -1859,6 +1911,7 @@ sub compiler_frontend {
   my $PL = "";
   my $CPUF = "-0";
   my $EXEOUT = "";
+  my $mapfn = "";
   my @sources;
   my @wcc_args;
   my @defines;
@@ -1902,6 +1955,8 @@ sub compiler_frontend {
       die"$0: fatal: unsupported target: $arg\n";
     } elsif ($arg =~ m@\A-(?:fo|fe)=(.*)\Z(?!\n)@s) {
       $EXEOUT = $1;  # `wcc -fo=...' for object files; `wcl -fe=...' for executable files. For dosmc, it's final output file.
+    } elsif ($arg =~ m@\A-fm=(.*)\Z(?!\n)@s) {
+      $mapfn = $1;  # `wcl -fm=...' for map files.
     } elsif ($arg eq "-ms") {
     } elsif ($arg =~ m@\A-m@) {
       die "$0: fatal: only -ms (small memory model) supported: $arg\n";
@@ -1982,6 +2037,8 @@ sub compiler_frontend {
       die "$0: fatal: file is both source and output: $srcfn\n" if exists($output_files{$srcfn});
     }
   }
+  die "$0: fatal: map file creation (-fo=...) not implemented for NASM linking (-cldn)\n" if $link_mode == 1 and (defined($mapfn) and length($mapfn));
+
   for my $srcfn (@sources) {
     die "$0: fatal: source file not found: $srcfn\n" if !-f($srcfn);
   }
@@ -2115,7 +2172,7 @@ sub compiler_frontend {
         my $exefn = $link_mode2 ? "$objbasefn.tmp.nasm" : $objfn;
         my $target2 = "bin";
         my @objfns = ($binobjfn);
-        print_and_link_executable($link_mode2, $exefn, $target2, $CPUF, $Q, @objfns);
+        print_and_link_executable($link_mode2, $exefn, $objfn, $mapfn, $target2, $CPUF, $Q, @objfns);
         if ($link_mode2 and run_command($Q, "nasm", "-O0", "-f", "bin", "-o", $objfn, $exefn)) {
           print STDERR "$0: fatal: nasm failed\n"; ++$errc;
         }
@@ -2149,7 +2206,7 @@ sub compiler_frontend {
     my $in1base = @sources ? $sources[0] : "nul"; $in1base =~ s@[.][^./]+\Z(?!\n)@@s;  # TODO(pts): Port to Win32.
     my $exefn = $link_mode == 1 ? "$in1base.tmp.nasm" : $EXEOUT;
     my $target2 = length($target) ? $target : "exe";
-    print_and_link_executable($link_mode, $exefn, $target2, $CPUF, $Q, @objfns);
+    print_and_link_executable($link_mode, $exefn, $EXEOUT, $mapfn, $target2, $CPUF, $Q, @objfns);
     # .nasm output ($EXEFN) cannot be used to produce an .obj file again (i.e. nasm -f obj).
     # TODO(pts): Add support for this, preferably autodetection.
     if ($link_mode == 1 and run_command($Q, "nasm", "-O0", "-f", "bin", "-o", $EXEOUT, $exefn)) {
