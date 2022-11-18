@@ -215,7 +215,7 @@ Notes about maximum memory usage of DOS programs:
   the segment * 16 + offset formula, where both segment and offset are
   16-bit), of which at most 640 KiB is available for programs (the rest is
   used by DOS device drivers, DOS, BIOS and video). Actually, due to DOS
-  overhead, it's usually 691 KiB ... 635 KiB available on DOS systems (DOSBox
+  overhead, it's usually 591 KiB ... 635 KiB available on DOS systems (DOSBox
   typically: 632 KiB, FreeDOS typically: 616 KiB, Windows 95 typically: 591
   KiB), and 512 KiB ... 600 KiB available in DOS mode of Windows systems.
 * dosmc programs, just like other 16-bit DOS programs written in C using
