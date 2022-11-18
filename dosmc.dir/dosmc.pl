@@ -78,13 +78,6 @@ sub shqe($) {
   }
 }
 
-if (@ARGV and $ARGV[0] eq "--prepare") {
-  my $prog = shqe($0);
-  my $args = join(" ", map { shqe($_) } @ARGV);
-  print ": prepared $0 $args\n";
-  exit(0);
-}
-
 # --- Embedded librarian: reads .obj files, writes .lib file.
 
 # OMF .obj record types to keep in .lib files.
@@ -2237,7 +2230,17 @@ sub compiler_frontend {
 # This can be called from extension commands (Perl code).
 # Pass @_ the same values as you would pass as command-line arguments to dosmc.
 sub dosmc {
-  if ($_[0] eq "//link") {
+  if (!@_) {
+    compiler_frontend();
+  } elsif ($_[0] eq "--prepare") {
+    my $prog = shqe($0);
+    my $args = join(" ", map { shqe($_) } @ARGV);
+    if (!-f("$MYDIR/dosmc.lib")) {
+      fix_path();
+      run_subcommand_or_perl_script_or_dir("$MYDIR/../dosmclib");
+    }
+    print ": prepared $0 $args\n";
+  } elsif ($_[0] eq "//link") {
     # //link supports only a subset of the command-line flags.
     shift(@_);
     for my $arg (@_) {
