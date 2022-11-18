@@ -684,6 +684,128 @@ sub write_map($$$$$$$$) {
   die $@ if $@;
 }
 
+# Postprocesses machine code read from .obj files at link time, before
+# applying fixups.
+#
+# If $codepp_mode is "nasm", then it changes instruction encoding to match
+# the style of NASM with -O9 (rather than wcc or wasm).
+sub postprocess_8086_code($$$$) {
+  my($codepp_mode, $datar, $fixups, $Q) = @_;
+  die "$0: assert: unsupported postprocess mode: $codepp_mode\n" if $codepp_mode ne "nasm-o9";
+  my $size = length($$datar);
+  my %fixup2_ofss;
+  for my $fixup (@$fixups) {
+    my($endofs, $ofs, $ltypem, $symbol) = @$fixup;
+    my $lsize = $endofs - $ofs;
+    $fixup2_ofss{$ofs} = 1 if $lsize == 2;
+  }
+  #{ my $fixup2_ofs_count = scalar(keys(%fixup2_ofss)); print STDERR "info: postprocess codepp mode=$codepp_mode size=$size fixup2_ofs_count=$fixup2_ofs_count\n"; }
+  my $pos = 0;
+  pos($$datar) = $pos;
+  while (1) {
+    if (exists($fixup2_ofss{$pos})) {  # Skip over switch jump table entry.
+      pos($$datar) = $pos += 2;
+    } elsif ($$datar !~ m@\G(
+          ([\x05|\x0D|\x15|\x1D|\x25|\x2D|\x35|\x3D])(?:([\00-\x7F])\x00|([\x80-\xFF])\xFF) |  # change234 ($2, $3, $4).
+          \x87([\xC0\xC0\xC5\xE8\xC3\xD8\xC1\xC8\xC7\xF8\xC2\xD0\xC6\xF0\xC4\xE0]) |  # change5 ($5).
+          ([\x13\x03\x23\x3B\x0B\x1B\x2B\x33\x8B\x13\x03\x23\x3B\x0B\x1B\x2B\x33\x8B])([\xC0-\xFF]) |  # change67 ($6, $7).
+          $INST_80286_RE)@gcxo) {
+      last if pos($$datar) == $size;
+      my $inst = substr($$datar, $pos, 6);
+      die "$0: fatal: unknown 8086+ instruction: " . unpack("H*", $inst) . "\n";
+    } else {
+      my $endpos = pos($$datar);
+      my $new;
+      #print STDERR "info: postprocess instr @" . sprintf("0x%x", $pos) . " " . unpack("H*", $1) . "\n";
+      if (defined($2)) {
+        # * For each 00..7F values of ??, change:
+        #
+        #     add ax,0x00??  05??00  -->  83C0??
+        #     or  ax,0x00??  0D??00  -->  83C8??
+        #     adc ax,0x00??  15??00  -->  83D0??
+        #     sbb ax,0x00??  1D??00  -->  83D8??
+        #     and ax,0x00??  25??00  -->  83E0??
+        #     sub ax,0x00??  2D??00  -->  83E8??
+        #     xor ax,0x00??  35??00  -->  83F0??
+        #     cmp ax,0x00??  3D??00  -->  83F8??
+        #
+        #   For NASM -O0 output, do change the opposite way.
+        #
+        # * For each 80..FF values of ??, change:
+        #
+        #     add ax,0xff??  05??FF  -->  83C0??
+        #     or  ax,0xff??  0D??FF  -->  83C8??
+        #     adc ax,0xff??  15??FF  -->  83D0??
+        #     sbb ax,0xff??  1D??FF  -->  83D8??
+        #     and ax,0xff??  25??FF  -->  83E0??
+        #     sub ax,0xff??  2D??FF  -->  83E8??
+        #     xor ax,0xff??  35??FF  -->  83F0??
+        #     cmp ax,0xff??  3D??FF  -->  83F8??
+        #
+        #   For NASM -O0 output, do change the opposite way.
+        if (!exists($fixup2_ofss{$pos + 1})) {  # Check for no fixup. With a fixup we don't know the final value.
+          #print STDERR "info: change234 (" . unpack("H*", $1) . ")\n";
+          $new = pack("CCC", 0x83, ord($2) + 0xC0 - 5, ord(defined($3) ? $3 : $4));
+        }
+      } elsif (defined($5)) {
+        # * Change these xchg instructrions involving ax:
+        #
+        #     xchg ax,ax  87C0  -->  9090
+        #     xchg ax,bp  87C5  -->  9590
+        #     xchg ax,bp  87E8  -->  9590
+        #     xchg ax,bx  87C3  -->  9390
+        #     xchg ax,bx  87D8  -->  9390
+        #     xchg ax,cx  87C1  -->  9190
+        #     xchg ax,cx  87C8  -->  9190
+        #     xchg ax,di  87C7  -->  9790
+        #     xchg ax,di  87F8  -->  9790
+        #     xchg ax,dx  87C2  -->  9290
+        #     xchg ax,dx  87D0  -->  9290
+        #     xchg ax,si  87C6  -->  9690
+        #     xchg ax,si  87F0  -->  9690
+        #     xchg ax,sp  87C4  -->  9490
+        #     xchg ax,sp  87E0  -->  9490
+        #print STDERR "info: change5 (" . unpack("H*", $1) . ")\n";
+        my $o5 = ord($5);
+        $new = pack("CC", 0x90 | ($o5 & 7) | (($o5 >> 3) & 7), 0x90);
+      } elsif (defined($6)) {
+        # * For the register-to-register instructions with the
+        #   ?a byte of the form (0xc0 | regb << 3 | rega), and the
+        #   ?b byte of the form (0xc0 | rega << 3 | regb), change:
+        #
+        #     adc  reg8a,reg8b    13?a  -->  11?b
+        #     add  reg8a,reg8b    03?a  -->  01?b
+        #     and  reg8a,reg8b    23?a  -->  21?b
+        #     cmp  reg8a,reg8b    3B?a  -->  39?b
+        #     or   reg8a,reg8b    0B?a  -->  09?b
+        #     sbb  reg8a,reg8b    1B?a  -->  19?b
+        #     sub  reg8a,reg8b    2B?a  -->  29?b
+        #     xor  reg8a,reg8b    33?a  -->  31?b
+        #     mov  reg8a,reg8b    8B?a  -->  89?b
+        #     adc  reg16a,reg16b  13?a  -->  11?b
+        #     add  reg16a,reg16b  03?a  -->  01?b
+        #     and  reg16a,reg16b  23?a  -->  21?b
+        #     cmp  reg16a,reg16b  3B?a  -->  39?b
+        #     or   reg16a,reg16b  0B?a  -->  09?b
+        #     sbb  reg16a,reg16b  1B?a  -->  19?b
+        #     sub  reg16a,reg16b  2B?a  -->  29?b
+        #     xor  reg16a,reg16b  33?a  -->  31?b
+        #     mov  reg16a,reg16b  8B?a  -->  89?b
+        #print STDERR "info: change67 (" . unpack("H*", $1) . ")\n";
+        my $o7 = ord($7);
+        $new = pack("CC", ord($6) - 2, 0xC0 | ($o7 & 7) << 3 | ($o7 >> 3) & 7);
+      }
+      if (defined($new)) {
+        die "$0: assert: bad postprocess change size\n" if length($new) != length($1);
+        #print STDERR "info: change (" . unpack("H*", $1) . ") to (" . unpack("H*", $new) . ")\n";
+        substr($$datar, $pos, length($1)) = $new;
+        pos($$datar) = $endpos;  # It was reset to 0 because of the substr(...).
+      }
+      $pos = $endpos;
+    }
+  }
+}
+
 # Assembly code to populate and return argc (ax) and argv (dx).
 #
 # Input: es and ss are DGROUP, ds:0 points to PSP, ss:di points to
@@ -784,8 +906,8 @@ xchg ax, bp  ; ax := bp.
 shr ax, 1  ; Set ax to argc, it's final return value.
 };
 
-sub link_executable($$$$$$$@) {
-  my($link_mode, $exefn, $fexefn, $mapfn, $target, $CPUF, $Q) = splice(@_, 0, 7);  # Keep .obj files in @_.
+sub link_executable($$$$$$$$@) {
+  my($link_mode, $exefn, $fexefn, $mapfn, $target, $codepp_mode, $CPUF, $Q) = splice(@_, 0, 8);  # Keep .obj files in @_.
   local $0 = "dosmc-linker-$target" . ($link_mode == 2 ? "-justload" : $link_mode ? "-nasm" : "");
   die "$0: assert: unknown target: $target\n" if $target ne "exe" and $target ne "com" and $target ne "bin";
   my $is_exe = $target eq "exe";
@@ -897,6 +1019,7 @@ sub link_executable($$$$$$$@) {
           }
         }
         my $datar = \$obj_ledata->{$segment_name}; my $size = $obj_segment_sizes->{$segment_name};
+        postprocess_8086_code($codepp_mode, $datar, $obj_fixupp->{$segment_name}, $Q) if $is_text and $codepp_mode;
         for my $fixup (@{$obj_fixupp->{$segment_name}}) {  # Preprocess fixups.
           my($endofs, $ofs, $ltypem, $symbol) = @$fixup;
           $has_base_fixup = 1 if $symbol =~ m@\ASB\$@;
@@ -1891,11 +2014,11 @@ segment %1
 
 );  #`
 
-sub print_and_link_executable($$$$$$$@) {
-  my($link_mode, $exefn, $fexefn, $mapfn, $target2, $CPUF, $Q, @objfns) = @_;
+sub print_and_link_executable($$$$$$$$@) {
+  my($link_mode, $exefn, $fexefn, $mapfn, $target, $codepp_mode, $CPUF, $Q, @objfns) = @_;
   my @mapargs = ((defined($mapfn) and length($mapfn)) ? ("-fm=$mapfn") : ());
-  print_command("//link", "-bt=$target2", $CPUF, ($link_mode == 2 ? "-cldl" : $link_mode ? "-cn" : "-ce"), "-fe=$exefn", @mapargs, @objfns) if !length($Q);
-  link_executable($link_mode, $exefn, $fexefn, $mapfn, $target2, $CPUF, $Q, @objfns);
+  print_command("//link", "-bt=$target", $CPUF, ($link_mode == 2 ? "-cldl" : $link_mode ? "-cn" : "-ce"), "-fe=$exefn", @mapargs, @objfns) if !length($Q);
+  link_executable($link_mode, $exefn, $fexefn, $mapfn, $target, $codepp_mode, $CPUF, $Q, @objfns);
 }
 
 sub compiler_frontend {
@@ -1911,6 +2034,7 @@ sub compiler_frontend {
   my $do_add_libc = 1;
   my $link_mode = 0;
   my $do_stack_check = 0;
+  my $codepp_mode = "";
 
   for my $arg (@_) {
     if ($arg eq "--" or $arg eq "-" or !length($arg)) {
@@ -1968,6 +2092,12 @@ sub compiler_frontend {
       $do_stack_check = 0;
     } elsif ($arg eq "-sc") {  # wcc and wcl doesn't support this flag.
       $do_stack_check = 1;
+    } elsif ($arg =~ m@\A-codepp=(.*)\Z(?!\n)@s) {  # Postprocess machine code read from .obj files at link time, before applying fixups.
+      $codepp_mode = $1;
+      die "$0: fatal: unsupported codepp mode: $arg\n" if $codepp_mode ne "nasm-o9";
+      # -codepp=nasm-o9 changes instruction encoding to match the style of NASM with -O9 (rather than wcc or wasm).
+    } elsif ($arg eq "-cpn") {  # Shortcut for -codepp=nasm.
+      $codepp_mode = "nasm-o9";
     } elsif ($arg =~ m@\A-@) {
       push @wcc_args, $arg;
     } elsif ($arg =~ m@[.](?:c|nasm|wasm|asm|obj|o|lib)\Z(?!\n)@) {  # .o is a legacy wcc alias of .obj.
@@ -2165,7 +2295,7 @@ sub compiler_frontend {
         my $exefn = $link_mode2 ? "$objbasefn.tmp.nasm" : $objfn;
         my $target2 = "bin";
         my @objfns = ($binobjfn);
-        print_and_link_executable($link_mode2, $exefn, $objfn, $mapfn, $target2, $CPUF, $Q, @objfns);
+        print_and_link_executable($link_mode2, $exefn, $objfn, $mapfn, $target2, $codepp_mode, $CPUF, $Q, @objfns);
         if ($link_mode2 and run_command($Q, "nasm", "-O0", "-f", "bin", "-o", $objfn, $exefn)) {
           print STDERR "$0: fatal: nasm failed\n"; ++$errc;
         }
@@ -2199,7 +2329,7 @@ sub compiler_frontend {
     my $in1base = @sources ? $sources[0] : "nul"; $in1base =~ s@[.][^./]+\Z(?!\n)@@s;  # TODO(pts): Port to Win32.
     my $exefn = $link_mode == 1 ? "$in1base.tmp.nasm" : $EXEOUT;
     my $target2 = length($target) ? $target : "exe";
-    print_and_link_executable($link_mode, $exefn, $EXEOUT, $mapfn, $target2, $CPUF, $Q, @objfns);
+    print_and_link_executable($link_mode, $exefn, $EXEOUT, $mapfn, $target2, $codepp_mode, $CPUF, $Q, @objfns);
     # .nasm output ($EXEFN) cannot be used to produce an .obj file again (i.e. nasm -f obj).
     # TODO(pts): Add support for this, preferably autodetection.
     if ($link_mode == 1 and run_command($Q, "nasm", "-O0", "-f", "bin", "-o", $EXEOUT, $exefn)) {
