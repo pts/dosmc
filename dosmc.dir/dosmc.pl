@@ -2206,6 +2206,7 @@ sub compiler_frontend {
   push @d_args, "-D__DOSMC_BIN__" if $is_bin;
   push @d_args, @defines;
   my @wcc_cmd = ('wcc', @d_args);
+  push @wcc_cmd, "-bt=dos";  # Does -DMSDOS so that `#ifdef MSDOS' still works.
   push @wcc_cmd, $Q if length($Q);
   push @wcc_cmd, $PL if $PL eq "-pl" or $PL eq "-zs";
   # We don't pass any -bt=..., because wcc ignres all -bt...  arguments.
