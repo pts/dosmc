@@ -9,7 +9,7 @@ toupper_:	sub al, 'a'
 		ja @$done
 		add al, 'A' - 'a'
 @$done:		add al, 'a'
-		cbw			; Sign-extend AL to AX.
+		;cbw			; No need to sign-extend AL to AX, it's up to the caller to ensure AX is between -1 and 255.
 		ret
 
 		end
