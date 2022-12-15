@@ -1494,9 +1494,9 @@ call__fullprog_end:  ; Make fullprog_code without fullprog_end fail.
       $sdc_top += $after_text_vofs - ($after_text_vofs & 15) if $is_exe;
       $sdc_top = ($sdc_top + 15) >> 4;
       print STDERR "info: vofs_top=$vofs_top ds+sd_top=ds+$sd_top=ds+" . sprintf("0x%04x", $sd_top). "=cs+$sdc_top=cs+" . sprintf("0x%04x", $sdc_top) . "\n";
-      if (defined($mapfn) and length($mapfn)) {
-        write_map($mapfn, $target, $exefn, \%symbol_vofs, \%segment_symbols, $vofs_entry, $fofs_delta, $vofs_base);
-      }
+    }
+    if (defined($mapfn) and length($mapfn)) {
+      write_map($mapfn, $target, $exefn, \%symbol_vofs, \%segment_symbols, $vofs_entry, $fofs_delta, $vofs_base);
     }
 
     if ($is_exe) {
