@@ -1,0 +1,6 @@
+services:
+  dosmc:
+    build: dosmc
+    volumes:
+      - ./source:/code
+    container_name: dosmc
