@@ -258,8 +258,7 @@ static void oputcrlf(void);
 "int 0x21" \
 "mov dl, 10" \
 "int 0x21" \
-parm [ dl ] \
-modify [ ax ];
+modify [ dl ax ];
 
 /* Writes a '\0'-terminated string + CRLF ("\r\n") to stdout.
  * The C standard requires "\n" instead of CRLF.
