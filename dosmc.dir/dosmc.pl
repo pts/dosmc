@@ -36,8 +36,7 @@ BEGIN { $^W = 1 }
 use integer;
 use strict;
 
-my $is_win32 = $^O =~ m@win32\b@i;  # Example: "MSWin32", "linux".
-my $path_sep = $is_win32 ? ";" : ":";
+my $is_win32 = $^O =~ m@win32\b@i ? 1 : 0;  # Example: "MSWin32", "linux".
 my $tool_exe_ext = $is_win32 ? ".exe" : "";
 my $MYDIR = $0;
 if ($is_win32) {
@@ -1636,6 +1635,10 @@ sub run_found_perl_script {
   @ARGV = @_;
   unshift @INC, $script_dir, $MYDIR;  # Don't add ".", the script can add it if needed.
   $ENV{PATH} = "$script_dir:$MYDIR:$ENV{PATH}";
+  local $::is_win32 = $::is_win32 = $is_win32;  # Double assignment ot prevent warning.
+  local $::dir_sep  = $::dir_sep  = $is_win32 ? "\\" : "/";
+  local $::path_sep = $::path_sep = $is_win32 ? ";" : ":";
+  local $::tool_exe_ext = $::tool_exe_ext = $tool_exe_ext;
   my $result;
   # do($script) won't work, Perl looks at @INC even if $script contains a '/'.
   { local $0 = $script; $result = do($script_basename); @ARGV = @old_argv; @INC = @old_inc; $ENV{PATH} = $old_path; die $@ if $@; }
@@ -2309,7 +2312,7 @@ sub compiler_frontend {
         $wcc_cmd[-1] =~ y@/@\\@ if $is_win32;  # !! Do it more.
       }
       push @wcc_cmd, $srcfn;
-      $wcc_cmd[-1] =~ y@/@\\@ if $is_win32;  # !! Do it more.
+      $wcc_cmd[-1] =~ y@/@\\@ if $is_win32;  # !! Do it more, e.g. args: -fo=.../... --> -fo=...\... It is needed by wcc.exe to prevent recognizing /... flags.
       if (run_command($Q, @wcc_cmd)) {
         print STDERR "$0: error: wcc failed\n"; ++$errc;
       }
