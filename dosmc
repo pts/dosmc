@@ -18,17 +18,17 @@ if "$D/true.li3" 2>/dev/null; then
   set -ex
   # time 7z a -sfx../../../../../../../../../../../../../../../../"$HOME"/Downloads/tiny7zx -t7z -mx=7 -md=32m -ms=on dosmc.dir{.sfx.7z,}
   # time 7z a -sfx../../../../../../../../../../../../../../../../"$HOME"/Downloads/7zConUpx.sfx -t7z -mx=7 -md=32m -ms=on dosmc.dir{.7z.exe,}
-  if ! test -f "$P"/dosmc.dir.linuxi386exec-v1.sfx.7z; then
+  if ! test -f "$P"/dosmc.dir.linuxi386exec-v2.sfx.7z; then
     if type wget >/dev/null 2>&1; then  # `type -p' doesn't work with Bash as /bin/sh.
-      wget -nv -O "$P"/dosmc.dir.linuxi386exec-v1.sfx.7z.tmp https://github.com/pts/dosmc/releases/download/executables-v1/dosmc.dir.linuxi386exec-v1.sfx.7z
+      wget -nv -O "$P"/dosmc.dir.linuxi386exec-v2.sfx.7z.tmp https://github.com/pts/dosmc/releases/download/executables-v2/dosmc.dir.linuxi386exec-v2.sfx.7z
     else
-      curl -sSLfo "$P"/dosmc.dir.linuxi386exec-v1.sfx.7z.tmp https://github.com/pts/dosmc/releases/download/executables-v1/dosmc.dir.linuxi386exec-v1.sfx.7z
+      curl -sSLfo "$P"/dosmc.dir.linuxi386exec-v2.sfx.7z.tmp https://github.com/pts/dosmc/releases/download/executables-v2/dosmc.dir.linuxi386exec-v2.sfx.7z
     fi
-    chmod 755 -- "$P"/dosmc.dir.linuxi386exec-v1.sfx.7z 2>/dev/null ||:
-    mv -- "$P"/dosmc.dir.linuxi386exec-v1.sfx.7z.tmp "$P"/dosmc.dir.linuxi386exec-v1.sfx.7z
+    chmod 755 -- "$P"/dosmc.dir.linuxi386exec-v2.sfx.7z 2>/dev/null ||:
+    mv -- "$P"/dosmc.dir.linuxi386exec-v2.sfx.7z.tmp "$P"/dosmc.dir.linuxi386exec-v2.sfx.7z
   fi
-  chmod 755 -- "$P"/dosmc.dir.linuxi386exec-v1.sfx.7z
-  (cd "$P" && ./dosmc.dir.linuxi386exec-v1.sfx.7z -y) || exit "$?"
+  chmod 755 -- "$P"/dosmc.dir.linuxi386exec-v2.sfx.7z
+  (cd "$P" && ./dosmc.dir.linuxi386exec-v2.sfx.7z -y) || exit "$?"
   set +ex
   if test -f "$D"/wcc && test -x "$D"/wcc; then
     echo "$0: info: download succeeded, running dosmc..." >&2
@@ -66,18 +66,18 @@ if ! test -x "$D"/wcc; then
   # To rebuild:
   # 1. Remove files git knows about from dosmc.dir. 
   # 2. chmod 755 dosmc.dir/*
-  # 3. $ tar -Hustar --owner=pts:1000 --group=pts:1000 -czvf dosmc.dir.linuxi386exec-v1.tar.gz dosmc.dir
-  # 4. advdef -z -3 dosmc.dir.linuxi386exec-v1.tar.gz
-  if ! test -f "$P"/dosmc.dir.linuxi386exec-v1.tar.gz; then
+  # 3. $ tar -Hustar --owner=pts:1000 --group=pts:1000 -czvf dosmc.dir.linuxi386exec-v2.tar.gz dosmc.dir
+  # 4. advdef -z -3 dosmc.dir.linuxi386exec-v2.tar.gz
+  if ! test -f "$P"/dosmc.dir.linuxi386exec-v2.tar.gz; then
     if type wget >/dev/null 2>&1; then  # `type -p' doesn't work with Bash as /bin/sh.
-      wget -nv -O "$P"/dosmc.dir.linuxi386exec-v1.tar.gz.tmp https://github.com/pts/dosmc/releases/download/executables-v1/dosmc.dir.linuxi386exec-v1.tar.gz
+      wget -nv -O "$P"/dosmc.dir.linuxi386exec-v2.tar.gz.tmp https://github.com/pts/dosmc/releases/download/executables-v2/dosmc.dir.linuxi386exec-v2.tar.gz
     else
-      curl -sSLfo "$P"/dosmc.dir.linuxi386exec-v1.tar.gz.tmp https://github.com/pts/dosmc/releases/download/executables-v1/dosmc.dir.linuxi386exec-v1.tar.gz
+      curl -sSLfo "$P"/dosmc.dir.linuxi386exec-v2.tar.gz.tmp https://github.com/pts/dosmc/releases/download/executables-v2/dosmc.dir.linuxi386exec-v2.tar.gz
     fi
-    chmod 755 -- "$P"/dosmc.dir.linuxi386exec-v1.tar.gz 2>/dev/null ||:
-    mv -- "$P"/dosmc.dir.linuxi386exec-v1.tar.gz.tmp "$P"/dosmc.dir.linuxi386exec-v1.tar.gz
+    chmod 755 -- "$P"/dosmc.dir.linuxi386exec-v2.tar.gz 2>/dev/null ||:
+    mv -- "$P"/dosmc.dir.linuxi386exec-v2.tar.gz.tmp "$P"/dosmc.dir.linuxi386exec-v2.tar.gz
   fi
-  (cd "$P" && tar xzvf dosmc.dir.linuxi386exec-v1.tar.gz) || exit "$?"
+  (cd "$P" && tar xzvf dosmc.dir.linuxi386exec-v2.tar.gz) || exit "$?"
   set +ex
   if test -f "$D"/wcc && test -x "$D"/wcc; then
     echo "$0: info: download succeeded" >&2
