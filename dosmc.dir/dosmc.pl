@@ -399,11 +399,43 @@ sub load_obj($$;$) {
       my($segment_idx, $ofs) = unpack("Cv", substr($data, 0, 3));
       $size -= 3; substr($data, 0, 3) = "";
       $add_ledata_sub->($segment_idx, $ofs, $data);
-    } elsif ($type == 0xa1) {  # Long LEDATA.
+    } elsif ($type == 0xa1) {  # Long LEDATA (LEDATA386).
       die "$0: fatal: long LEDATA too short" if $size < 5;
       my($segment_idx, $ofs) = unpack("CV", substr($data, 0, 5));
       $size -= 5; substr($data, 0, 5) = "";
       $add_ledata_sub->($segment_idx, $ofs, $data);
+    } elsif ($type == 0xa2) {  # LIDATA.
+      die "$0: fatal: LIDATA too short" if $size < 3;
+      my($segment_idx, $ofs) = unpack("Cv", substr($data, 0, 3));
+      my $i = 3;
+      while ($i < $size) {
+        die "$0: fatal: LIDATA entry too short" if $size < 5;
+        my($repeat_count, $block_count, $block_size) = unpack("vvC", substr($data, $i, 5));
+        $i += 5;
+        die "$0: fatal: LIDATA block count not zero\n" if $block_count;
+        die "$0: fatal: LIDATA block too short\n" if length($data) < $i + $block_size;
+        if ($repeat_count or $block_size) {
+          $add_ledata_sub->($segment_idx, $ofs, substr($data, $i, $block_size) x $repeat_count);
+          $ofs += $block_size * $repeat_count;
+        }
+        $i += $block_size;
+      }
+    } elsif ($type == 0xa3) {  # Long LIDATA (LIDATA386). wcc generates long LIDATA instead even for `char data[62000];'.
+      die "$0: fatal: long LIDATA too short" if $size < 5;
+      my($segment_idx, $ofs) = unpack("CV", substr($data, 0, 5));
+      my $i = 5;
+      while ($i < $size) {
+        die "$0: fatal: long LIDATA entry too short" if $size < 7;
+        my($repeat_count, $block_count, $block_size) = unpack("VvC", substr($data, $i, 7));
+        $i += 7;
+        die "$0: fatal: long LIDATA block count not zero\n" if $block_count;
+        die "$0: fatal: long LIDATA block too short\n" if length($data) < $i + $block_size;
+        if ($repeat_count or $block_size) {
+          $add_ledata_sub->($segment_idx, $ofs, substr($data, $i, $block_size) x $repeat_count);
+          $ofs += $block_size * $repeat_count;
+        }
+        $i += $block_size;
+      }
     } elsif ($type == 0x90 or $type == 0xb6) {  # PUBDEF or LPUBDEF(static).
       my $recname = $type == 0xb6 ? "LPUBDEF" : "PUBDEF";
       # $ as a prefix would make nasm to treat it as a symbol name, e.g. $ax
